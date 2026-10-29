@@ -1,0 +1,9 @@
+.env*
+!.env.example
+node_modules/
+.profile/
+.session*
+*.b64
+.zoom-meeting-bot/
+screenshots/
+*.log

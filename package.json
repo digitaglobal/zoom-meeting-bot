@@ -1,0 +1,23 @@
+{
+  "name": "zoom-meeting-bot",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Starts a Zoom meeting as host (new, or the next one on the schedule), hands host to a named person, then drops off. Runs on your computer or on a GitHub schedule.",
+  "scripts": {
+    "start": "node src/cli.js",
+    "tick": "node src/cli.js --tick",
+    "tick:dry": "node src/cli.js --tick --dry-run",
+    "export-session": "node scripts/export-session.js",
+    "test": "node --test test/unit/*.test.js",
+    "test:live": "node test/live-e2e.js --yes",
+    "test:live-cli": "node test/live-cli.js --yes",
+    "test:live-scheduled": "node test/live-scheduled.js",
+    "test:live-tick": "node test/live-tick.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.14.0"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

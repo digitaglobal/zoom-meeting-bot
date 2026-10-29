@@ -1,0 +1,58 @@
+name: Zoom host hand-over
+
+# Every 10 minutes, look at today's Zoom meetings. If one is about to start (10 minutes ahead), start it as host,
+# hand host to Kemal and drop off. If nothing is due the run ends after about a minute and does nothing.
+#
+# The cron times are UTC. 11:00-00:59 UTC is 06:00-19:59 in Jamaica (UTC-5, no daylight saving); change the hours
+# below if the interviews are earlier or later. GitHub may start a scheduled run a few minutes late.
+on:
+  schedule:
+    - cron: '*/10 11-23,0 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only say what would happen; start nothing'
+        type: boolean
+        default: true
+
+# The run can read this repository and nothing else. Only the schedule or a manual click starts it:
+# never a pull request, so nobody else's code can ever run here with the Zoom login.
+permissions:
+  contents: read
+
+# One run at a time: the Zoom account can only host one meeting at once.
+concurrency:
+  group: zoom-host-handover
+  cancel-in-progress: false
+
+jobs:
+  handover:
+    runs-on: ubuntu-latest
+    # If Kemal is very late or something is unclear, the bot stays in the meeting as host (never leaves hostless) until this
+    # limit stops the run; the run then shows as failed, which is the alert.
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install (no install scripts, exact versions from package-lock.json)
+        run: npm ci --ignore-scripts
+
+      - name: Run the tests first (they need no secrets; a broken safety rule stops the run before the login is used)
+        run: npm test
+
+      - name: Check the schedule and hand over if a meeting is due
+        run: node src/cli.js --tick $TICK_ARGS
+        env:
+          ZOOM_SESSION: ${{ secrets.ZOOM_SESSION }}
+          NEW_HOST_NAME: ${{ secrets.NEW_HOST_NAME }}
+          MEETING_FILTER: ${{ vars.MEETING_FILTER || 'interview' }}
+          # a meeting is started when it begins within 15 minutes; checked every 10, that is 15 to 5 minutes early (about 10 on average)
+          LEAD_MINUTES: '15'
+          WAIT_FOR_NEW_HOST_SECONDS: '3600'
+          TICK_ARGS: ${{ inputs.dry_run == true && '--dry-run' || '' }}

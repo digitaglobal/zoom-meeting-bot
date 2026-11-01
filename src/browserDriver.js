@@ -35,7 +35,7 @@ class ZoomBrowserDriver {
     // Chrome is started without the login in ITS environment, as a precaution. (This process still holds it, and on the cloud
     // Chrome runs without its sandbox, so a Chrome exploit delivered through Zoom's own pages is the residual risk.)
     const env = { ...process.env }
-    for (const k of ['ZOOM_SESSION', 'ZOOM_PASSWORD', 'ZOOM_USERNAME']) delete env[k]
+    for (const k of ['ZOOM_SESSION', 'ZOOM_PASSWORD', 'ZOOM_USERNAME', 'REPORT_WEBHOOK_URL']) delete env[k]
     this.browser = await puppeteer.launch({
       executablePath: findChrome(this.cfg.chromePath),
       env,

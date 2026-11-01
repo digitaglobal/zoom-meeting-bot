@@ -61,6 +61,27 @@ If Zoom ever signs the bot out, a run fails with "the saved session has probably
 GitHub also switches scheduled workflows off in a public repository after 60 days with no activity; it emails you,
 and one click on **Enable workflow** turns it back on.
 
+### Timers and reports (optional, recommended)
+
+GitHub's own schedule is not exact: it can start a run late or skip one. So an outside timer (the owner's Pabbly) starts runs
+on time by asking GitHub to run this workflow (`workflow_dispatch`, with a fine-grained token that can run workflows in this one
+repository and nothing else):
+
+- **One run 10 minutes before each booked interview** (`dry_run` false).
+- **A login check every hour** (`dry_run` true): it only looks at Zoom. If the saved login has expired it fails, and the owner
+  hears about it hours before an interview instead of at the interview.
+- GitHub's own 10-minute schedule stays as a backup. A run only starts a meeting that is really due on Zoom's schedule,
+  so a duplicate or stale timer does nothing.
+
+The optional secret `REPORT_WEBHOOK_URL` (an https address) makes the bot send a **private report** after every real hand-over
+(done, or not finished) and when a run fails. A report holds: what happened, when, how long it took, and the interview title
+(so the owner knows which one). It never holds a login, a link, a meeting number or the new host's name, and the address is
+never printed in any log. If a report cannot be delivered, the hand-over is not affected. The backup schedule does not send
+plain error reports (they would repeat every 10 minutes); the hourly check does.
+
+To check that reports arrive: *Actions -> Zoom host hand-over -> Run workflow* with **Send one test report** ticked. It opens no
+Zoom and starts nothing; it only sends a report titled "TEST - not a real interview". (Locally: `node src/cli.js --test-report`.)
+
 ### Times
 Everything is Jamaica time (UTC-5, no daylight saving). Zoom shows meeting times in the account's own time zone, which
 must be the same; set `ZOOM_TIMEZONE` otherwise. Log lines are stamped with Jamaica time. The cron hours in the
@@ -128,6 +149,8 @@ src/browserDriver.js   everything that touches Zoom's screens (selectors live he
 src/session.js         the saved login as one text value (encode, decode; never printed)
 src/stay.js            what the bot does when it cannot finish: stay as host, and fail the run if the browser dies
 src/log.js             Jamaica-time stamps and the public-log masking
+src/report.js          the private "what happened" report (address from the secret REPORT_WEBHOOK_URL)
+src/report-failure.js  sends the "run failed" report from the workflow
 src/config.js          settings
 scripts/export-session.js   makes the ZOOM_SESSION value
 ```

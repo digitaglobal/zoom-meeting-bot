@@ -34,7 +34,7 @@ async function runTick(driver, cfg, opts = {}, deps = {}) {
     start: { meetingId: meeting.id },
     redactNames: cfg.quiet,
   }, { log })
-  return { ...result, action: 'handover' }
+  return { ...result, action: 'handover', meeting }
 }
 
 module.exports = { runTick }

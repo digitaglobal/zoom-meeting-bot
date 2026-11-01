@@ -5,10 +5,11 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { decodeSession } = require('./session')
+const { parseReportUrl } = require('./report')
 
 // Only these settings are ever read from an env file. Anything else in the file (another project's secrets) is ignored,
 // so it can never end up in this process or in the browser's environment.
-const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET'])
+const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL'])
 
 function loadDotEnv(file, env = process.env) {
   if (!fs.existsSync(file)) return
@@ -100,6 +101,9 @@ function loadConfig(env = process.env) {
     leadMinutes: whole(env, 'LEAD_MINUTES', 10, 0, 60),
     lateMinutes: whole(env, 'LATE_MINUTES', 5, 0, 120),
     timeZone,
+    // the private "what happened" report (see report.js). The address is a secret: it is never printed or logged.
+    reportUrl: parseReportUrl(env.REPORT_WEBHOOK_URL),
+    reportAddressProblem: !!String(env.REPORT_WEBHOOK_URL ?? '').trim() && !parseReportUrl(env.REPORT_WEBHOOK_URL),
   }
 }
 

@@ -5,6 +5,7 @@
 //   node src/cli.js --meeting 123456789   start that SCHEDULED meeting instead
 //   node src/cli.js --tick           schedule check: if a meeting is about to start, start it and hand over
 //   node src/cli.js --tick --dry-run     only say what would happen
+//   node src/cli.js --test-report    send one test report to REPORT_WEBHOOK_URL and stop (does not open Zoom)
 //   node src/cli.js --name "Maria"   hand host to someone else
 //   node src/cli.js --wait 900       wait up to 15 minutes for the new host
 //   node src/cli.js --hidden / --headed  run the browser without / with a window
@@ -14,6 +15,7 @@ const { runHandover } = require('./handover')
 const { runTick } = require('./tick')
 const { makeLog, scrub } = require('./log')
 const { stayInMeeting } = require('./stay')
+const { buildReport, sendReport, runUrlFromEnv } = require('./report')
 
 function parseArgs(argv) {
   const out = {}
@@ -24,6 +26,7 @@ function parseArgs(argv) {
     else if (a === '--meeting') out.meeting = argv[++i]
     else if (a === '--tick') out.tick = true
     else if (a === '--dry-run') out.dryRun = true
+    else if (a === '--test-report') out.testReport = true
     else if (a === '--hidden') out.headed = false
     else if (a === '--headed') out.headed = true
     else if (a === '--help' || a === '-h') out.help = true
@@ -46,6 +49,21 @@ async function main() {
 
   const log = makeLog({ quiet: cfg.quiet, timeZone: cfg.timeZone })
   const driver = new ZoomBrowserDriver(cfg, log)
+  if (cfg.reportAddressProblem) log('REPORT_WEBHOOK_URL is set but is not a valid https address, so no reports will be sent.')
+  const startedAt = new Date()
+  // A private report (see report.js). The backup schedule stays quiet about plain errors, so a dead login is not announced
+  // every 10 minutes (the hourly login check announces it); a meeting that was started is always reported.
+  const fromBackupSchedule = process.env.GITHUB_EVENT_NAME === 'schedule'
+  // Telling the owner must never stop or crash a hand-over (the bot may be in a live meeting), so nothing here can throw.
+  const tell = async (event, fields) => {
+    try { return await sendReport(cfg.reportUrl, buildReport({ event, startedAt, timeZone: cfg.timeZone, hostName: cfg.newHostName, runUrl: runUrlFromEnv(), ...fields }), { log }) } catch { log('The report could not be prepared. The hand-over itself is not affected.'); return { sent: false } }
+  }
+  if (args.testReport) {
+    if (!cfg.reportUrl) { log('There is no valid REPORT_WEBHOOK_URL, so there is nothing to test.'); return 1 }
+    const test = await tell('test', { ok: true, reason: 'test', detail: 'No interview was started.', meeting: { title: 'TEST - not a real interview', start: 'none' } })
+    log(test.sent ? 'The test report was sent.' : 'The test report was NOT delivered.')
+    return test.sent ? 0 : 1
+  }
   process.on('SIGINT', async () => { log('Closing the browser...'); await driver.close(); process.exit(130) })
 
   let result
@@ -70,12 +88,15 @@ async function main() {
     }
   } catch (e) {
     log(`Problem: ${e.message}`)
+    if (driver.started || !fromBackupSchedule) await tell('error', { ok: false, detail: e.message })
     const file = await driver.shot('error')
     if (file) log(`Screenshot: ${file}`)
     if (driver.started) return stayInMeeting(driver, cfg, log, 'An error happened after the meeting started.')
     await driver.close()
     return 1
   }
+
+  await tell('handover', { ok: result.ok, reason: result.reason, detail: result.detail, meeting: result.meeting, hostName: [cfg.newHostName, result.target && result.target.userName] })
 
   if (result.ok) {
     log(`Done. ${cfg.quiet ? 'The new host' : result.target.userName} is the host and the bot has left.`)

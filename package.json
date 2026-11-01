@@ -1,6 +1,6 @@
 {
   "name": "zoom-meeting-bot",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Starts a Zoom meeting as host (new, or the next one on the schedule), hands host to a named person, then drops off. Runs on your computer or on a GitHub schedule.",
   "scripts": {

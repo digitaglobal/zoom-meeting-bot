@@ -1,10 +1,16 @@
 name: Zoom host hand-over
 
-# Every 10 minutes, look at today's Zoom meetings. If one is about to start (10 minutes ahead), start it as host,
-# hand host to Kemal and drop off. If nothing is due the run ends after about a minute and does nothing.
+# What starts a run:
+#   1. The owner's timer (Pabbly): one run 10 minutes before each booked interview, and one every hour as a login check
+#      (dry_run = true: it only looks at Zoom, which also warns the owner early if the saved login has expired).
+#   2. GitHub's own schedule below, every 10 minutes, as a backup in case a timer is missed. GitHub may start these runs
+#      a few minutes late, or skip some.
+# Every run looks at today's Zoom meetings. If one is about to start (inside the lead window below) it starts that meeting
+# as host, hands host to Kemal and drops off. If nothing is due the run ends after about a minute and does nothing, so a
+# duplicate or stale timer is harmless.
 #
 # The cron times are UTC. 11:00-00:59 UTC is 06:00-19:59 in Jamaica (UTC-5, no daylight saving); change the hours
-# below if the interviews are earlier or later. GitHub may start a scheduled run a few minutes late.
+# below if the interviews are earlier or later.
 on:
   schedule:
     - cron: '*/10 11-23,0 * * *'
@@ -14,15 +20,20 @@ on:
         description: 'Only say what would happen; start nothing'
         type: boolean
         default: true
+      send_test_report:
+        description: 'Send one test report to the owner and stop (starts nothing, does not open Zoom)'
+        type: boolean
+        default: false
 
-# The run can read this repository and nothing else. Only the schedule or a manual click starts it:
+# The run can read this repository and nothing else. Only the schedule or a manual/API start begins it:
 # never a pull request, so nobody else's code can ever run here with the Zoom login.
 permissions:
   contents: read
 
-# One run at a time: the Zoom account can only host one meeting at once.
+# One hand-over at a time: the Zoom account can only host one meeting at once. A dry-run login check (or a test report) has its own group,
+# so it can never wait behind, or cancel, a real hand-over.
 concurrency:
-  group: zoom-host-handover
+  group: zoom-host-handover${{ (inputs.dry_run == true || inputs.send_test_report == true) && '-check' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -51,8 +62,19 @@ jobs:
         env:
           ZOOM_SESSION: ${{ secrets.ZOOM_SESSION }}
           NEW_HOST_NAME: ${{ secrets.NEW_HOST_NAME }}
+          # optional: where the bot sends its private "what happened" report (see README). Empty = no reports.
+          REPORT_WEBHOOK_URL: ${{ secrets.REPORT_WEBHOOK_URL }}
           MEETING_FILTER: ${{ vars.MEETING_FILTER || 'interview' }}
-          # a meeting is started when it begins within 15 minutes; checked every 10, that is 15 to 5 minutes early (about 10 on average)
+          # a meeting is started when it begins within 15 minutes; a timer 10 minutes ahead starts it then, the backup
+          # schedule (every 10 minutes) starts it 15 to 5 minutes ahead
           LEAD_MINUTES: '15'
           WAIT_FOR_NEW_HOST_SECONDS: '3600'
-          TICK_ARGS: ${{ inputs.dry_run == true && '--dry-run' || '' }}
+          TICK_ARGS: ${{ inputs.send_test_report == true && '--test-report' || inputs.dry_run == true && '--dry-run' || '' }}
+
+      # Only if a step above failed, and not for the backup schedule (which would repeat itself every 10 minutes). It sends one
+      # private "the run failed" report, unless the bot already reported this run. It is given the report address and nothing else.
+      - name: Tell the owner the run failed
+        if: failure() && github.event_name != 'schedule'
+        run: node src/report-failure.js
+        env:
+          REPORT_WEBHOOK_URL: ${{ secrets.REPORT_WEBHOOK_URL }}

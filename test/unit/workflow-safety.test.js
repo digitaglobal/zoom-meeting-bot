@@ -170,3 +170,35 @@ test('workflows: the stuck-run limits are consistent (the wait is shorter than t
     assert.ok(lead >= 15, `${f}: with a check every 10 minutes the lead must be at least 15 minutes`)
   }
 })
+
+// ---- the private report and the outside timers ----
+test('workflows: a hand-over run and a dry-run login check or test report never wait for, or cancel, each other', () => {
+  for (const f of files) {
+    assert.match(code(f), /group:\s*zoom-host-handover\$\{\{\s*\(inputs\.dry_run == true \|\| inputs\.send_test_report == true\) && '-check' \|\| ''\s*\}\}/, `${f}: the dry-run check needs its own concurrency group`)
+    assert.match(code(f), /cancel-in-progress:\s*false/)
+  }
+})
+
+test('workflows: the "run failed" step runs last, only on a failure, skips the backup schedule, and gets only the report address', () => {
+  for (const f of files) {
+    const s = code(f)
+    const at = s.indexOf('src/report-failure.js')
+    assert.ok(at > s.indexOf('src/cli.js'), `${f}: the failure step must come after the bot step`)
+    const step = s.slice(s.lastIndexOf('- name:', at))
+    assert.match(step, /^\s+if:\s*failure\(\)\s*&&\s*github\.event_name != 'schedule'\s*$/m, `${f}: the failure step must only run on a failure, and not for the schedule`)
+    assert.deepEqual([...step.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((m) => m[1]), ['REPORT_WEBHOOK_URL'], `${f}: the failure step may only be given the report address`)
+    assert.ok(!/ZOOM_SESSION|NEW_HOST_NAME/.test(step), `${f}: the failure step must not see the login or the host's name`)
+  }
+})
+
+test('workflows: the bot step gets the report address only as a secret environment entry', () => {
+  for (const f of files) assert.match(code(f), /^\s+REPORT_WEBHOOK_URL:\s*\$\{\{\s*secrets\.REPORT_WEBHOOK_URL\s*\}\}\s*$/m)
+})
+
+test('workflows: the "send one test report" button is off by default and wins over the other modes; the other modes keep their arguments', () => {
+  for (const f of files) {
+    const s = code(f)
+    assert.match(s, /send_test_report:\s*\n\s+description:[^\n]*\n\s+type:\s*boolean\n\s+default:\s*false/, `${f}: the test-report input must default to false`)
+    assert.match(s, /TICK_ARGS:\s*\$\{\{\s*inputs\.send_test_report == true && '--test-report' \|\| inputs\.dry_run == true && '--dry-run' \|\| ''\s*\}\}/, `${f}: the arguments must be test-report, then dry-run, then none`)
+  }
+})

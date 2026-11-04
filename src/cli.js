@@ -66,7 +66,7 @@ async function main() {
   const fromBackupSchedule = process.env.GITHUB_EVENT_NAME === 'schedule'
   // Telling the owner must never stop or crash a hand-over (the bot may be in a live meeting), so nothing here can throw.
   const tell = async (event, fields) => {
-    try { return await sendReport(cfg.reportUrl, buildReport({ event, startedAt, timeZone: cfg.timeZone, hostName: cfg.newHostName, runUrl: runUrlFromEnv(), ...fields }), { log }) } catch { log('The report could not be prepared. The hand-over itself is not affected.'); return { sent: false } }
+    try { return await sendReport(cfg.reportUrl, buildReport({ event, startedAt, timeZone: cfg.timeZone, hostName: [cfg.newHostName, ...cfg.backupHostNames], runUrl: runUrlFromEnv(), ...fields }), { log }) } catch { log('The report could not be prepared. The hand-over itself is not affected.'); return { sent: false } }
   }
   if (args.testReport) {
     if (!cfg.reportUrl) { log('There is no valid REPORT_WEBHOOK_URL, so there is nothing to test.'); return 1 }
@@ -86,13 +86,14 @@ async function main() {
     } else {
       result = await runHandover(driver, {
         newHostName: cfg.newHostName,
+        backupHostNames: cfg.backupHostNames,
         waitMs: cfg.waitSeconds * 1000,
         start: args.meeting ? { meetingId: args.meeting } : undefined,
         redactNames: cfg.quiet,
         onStarted: (info) => {
           if (cfg.quiet) return // never print the invite link where it could be public
           console.log('\n==============================================================')
-          console.log(` Send this link to ${cfg.newHostName} so they can join:`)
+          console.log(` Send this link to ${[cfg.newHostName, ...cfg.backupHostNames].join(' or ')} so they can join:`)
           console.log(`   ${info.link}`)
           console.log('==============================================================\n')
         },
@@ -108,7 +109,7 @@ async function main() {
     return 1
   }
 
-  await tell('handover', { ok: result.ok, reason: result.reason, detail: result.detail, meeting: result.meeting, hostName: [cfg.newHostName, result.target && result.target.userName] })
+  await tell('handover', { ok: result.ok, reason: result.reason, detail: result.detail, meeting: result.meeting, hostName: [cfg.newHostName, ...cfg.backupHostNames, result.target && result.target.userName] })
 
   if (result.ok) {
     log(`Done. ${cfg.quiet ? 'The new host' : result.target.userName} is the host and the bot has left.`)

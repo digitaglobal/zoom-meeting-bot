@@ -15,7 +15,7 @@ const { parseUpcoming } = require('./upcoming')
 function chromeEnv(env) {
   const out = {}
   for (const [k, v] of Object.entries(env || {})) {
-    if (/^zoom_/i.test(k) || /^(new_host_name|report_webhook_url)$/i.test(k)) continue
+    if (/^zoom_/i.test(k) || /^(new_host_name|backup_host_names|report_webhook_url)$/i.test(k)) continue
     out[k] = v
   }
   return out

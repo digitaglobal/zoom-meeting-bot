@@ -7,10 +7,11 @@ const path = require('path')
 const { decodeSession } = require('./session')
 const { parseReportUrl } = require('./report')
 const { API_KEYS, parseApiCredentials } = require('./zoomApi')
+const { norm } = require('./participants')
 
 // Only these settings are ever read from an env file. Anything else in the file (another project's secrets) is ignored,
 // so it can never end up in this process or in the browser's environment.
-const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
+const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'BACKUP_HOST_NAMES', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
 
 function loadDotEnv(file, env = process.env, allowed = ALLOWED_KEYS) {
   if (!fs.existsSync(file)) return
@@ -61,6 +62,29 @@ function whole(env, key, fallback, min, max) {
   return n
 }
 
+// BACKUP_HOST_NAMES: people who get host if they show up before the first choice (NEW_HOST_NAME, who always wins a tie).
+// Separated by commas, semicolons or new lines. A name is matched as whole words, so on a cloud run (nobody watching) every
+// name must be a FULL display name: a single word such as "Mila" would also fit a stranger called "Mila Kunis". Errors say
+// which problem it is, never the name (a secret).
+const MAX_BACKUPS = 20
+function parseBackupNames(raw, firstChoice, ci) {
+  const seen = new Set([norm(firstChoice)])
+  const names = []
+  for (const part of String(raw ?? '').split(/[,;\r\n]+/)) {
+    const name = part.trim()
+    if (!name) continue
+    if (name.length > 100) throw new Error('BACKUP_HOST_NAMES: a name is too long')
+    const key = norm(name)
+    if (!key) throw new Error('BACKUP_HOST_NAMES: a name has no letters or digits')
+    if (ci && key.split(' ').length < 2) throw new Error('BACKUP_HOST_NAMES: on a cloud run every name must be a full display name (first and last), as Zoom shows it')
+    if (seen.has(key)) continue
+    seen.add(key)
+    names.push(name)
+  }
+  if (names.length > MAX_BACKUPS) throw new Error(`BACKUP_HOST_NAMES: at most ${MAX_BACKUPS} names`)
+  return names
+}
+
 function loadConfig(env = process.env) {
   const username = String(env.ZOOM_USERNAME ?? '').trim()
   const password = String(env.ZOOM_PASSWORD ?? '')
@@ -79,6 +103,7 @@ function loadConfig(env = process.env) {
   if (ci && !String(env.NEW_HOST_NAME ?? '').trim()) throw new Error('NEW_HOST_NAME must be set on a cloud run: the host\'s full display name, as Zoom shows it (use a GitHub secret).')
   const newHostName = String(env.NEW_HOST_NAME || 'Kemal').trim()
   if (!newHostName) throw new Error('NEW_HOST_NAME cannot be empty')
+  const backupHostNames = parseBackupNames(env.BACKUP_HOST_NAMES, newHostName, ci)
 
   let meetingFilter = null
   const filterText = String(env.MEETING_FILTER ?? '.*').trim()
@@ -94,9 +119,11 @@ function loadConfig(env = process.env) {
     username,
     password,
     canSignInWithPassword: !!(username && password.trim()),
-    session: rawSession ? decodeSession(rawSession) : null,
+    // In API mode an old saved login is ignored entirely: it is not decoded and never handed to Chrome as cookies.
+    session: rawSession && !api ? decodeSession(rawSession) : null,
     api, // { accountId, clientId, clientSecret, sdkKey, sdkSecret, hostEmail } or null. Secrets: never print this object.
     newHostName,
+    backupHostNames, // other people who get host if they are seen before the first choice (newHostName); never printed
     waitSeconds,
     chromePath: (env.CHROME_PATH || '').trim(),
     headed: env.HEADED === undefined ? false : truthy(env.HEADED),

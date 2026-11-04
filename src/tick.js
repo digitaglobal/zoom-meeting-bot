@@ -30,6 +30,7 @@ async function runTick(driver, cfg, opts = {}, deps = {}) {
   if (!cfg.quiet) log(`Starting the meeting that begins at ${meeting.start} (in ${Math.round(meeting.startsInMinutes)} min).`)
   const result = await handover(driver, {
     newHostName: cfg.newHostName,
+    backupHostNames: cfg.backupHostNames,
     waitMs: cfg.waitSeconds * 1000,
     start: { meetingId: meeting.id },
     redactNames: cfg.quiet,

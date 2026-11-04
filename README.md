@@ -21,6 +21,7 @@ npm run tick:dry                   # what would the schedule check do right now?
 
 Settings go in a `.env` file in this folder (see `.env.example`): `ZOOM_USERNAME`, `ZOOM_PASSWORD`, and optionally
 `NEW_HOST_NAME` (default `Kemal`, not case sensitive: "kemal" and "Kemal" both match "Kemal Example". Use the **full display name** as it shows in Zoom, so fewer people can fit).
+`BACKUP_HOST_NAMES` (optional) lists more people who get host if they are seen before `NEW_HOST_NAME`; see "Backup hosts" below.
 The first run opens a visible Chrome window once so you can sign in; after that it runs hidden.
 
 ## Run it on GitHub (free, every 10 minutes, computer off)
@@ -38,6 +39,15 @@ The workflow `.github/workflows/zoom-host-handover.yml` runs `node src/cli.js --
 variable cannot narrow it). Locally, `MEETING_FILTER` in `.env` can still limit a run to titles matching a pattern.
 
 > The host's name is a *secret* (`NEW_HOST_NAME`), so GitHub hides it in the log, and the bot itself never writes it there.
+
+**Backup hosts (optional).** `NEW_HOST_NAME` is the first choice. A second secret, `BACKUP_HOST_NAMES`, can list more people
+(full display names exactly as Zoom shows them, separated by commas or new lines; at most 20). There is no "late" limit:
+whoever on the list the bot sees first gets host, so a backup who is already in is made host without waiting for the first
+choice. If two people from the list are there at the same check, the **earlier name on the list wins**, so the first choice
+always beats a backup (the bot lets the first choice in from the waiting room even if a backup is already inside). Once a
+backup has been made host the bot leaves, and a first choice who arrives later is left alone. On a cloud run a one-word
+backup name is refused, because it would also fit strangers who share that word. The list is a secret like the host's name:
+it is never printed, never given to Chrome, and a public log says only "a backup host" without naming anyone.
 
 ### One-time setup
 
@@ -149,7 +159,9 @@ differs, `src/browserDriver.js` is the one file to adjust. The hand-over rules a
   who is already inside is chosen even if the real person is still in the waiting room. The worst case is host of that
   one meeting; it cannot reach the Zoom account's settings, stored recordings or other meetings. Use the **full display
   name** in `NEW_HOST_NAME` and ask the host to join with that name. If the real person and a lookalike are inside at the
-  same moment, or the same person is in twice (a second device), the bot does nothing and waits.
+  same moment, or the same person is in twice (a second device), the bot does nothing and waits. Every name added to
+  `BACKUP_HOST_NAMES` is one more name a guest could type, and a guest who truly has that name (a common one such as
+  "Alex Smith") would be made host if they join first, so list only people who are really meant to run the meeting.
 - If Kemal never arrives, or Zoom does not confirm the change, **the bot stays in the meeting as host** (on your computer
   until you press Ctrl+C; on GitHub until the run's 70-minute limit stops it, and the run is marked failed from the start,
   even if the browser dies). Until that limit it does not leave the meeting without its host, and it never claims success

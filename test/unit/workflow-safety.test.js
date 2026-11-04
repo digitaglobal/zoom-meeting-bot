@@ -167,6 +167,8 @@ test('workflows: the tests run BEFORE the login is used, so a broken safety rule
     assert.ok(tests > 0 && tick > 0, `${f} must run npm test and the bot`)
     assert.ok(tests < tick, `${f} must run the tests before the bot`)
     assert.ok(s.indexOf('ZOOM_SESSION') > tests, `${f}: the secret must only be given to the step after the tests`)
+    assert.ok(s.indexOf('BACKUP_HOST_NAMES') > tests, `${f}: the backup host names must only be given to the step after the tests`)
+    assert.match(s, /^\s+BACKUP_HOST_NAMES:\s*\$\{\{\s*secrets\.BACKUP_HOST_NAMES\s*\}\}\s*$/m, `${f}: BACKUP_HOST_NAMES must be a secret environment entry`)
     for (const name of ['ZOOM_ACCOUNT_ID', 'ZOOM_S2S_CLIENT_ID', 'ZOOM_S2S_CLIENT_SECRET', 'ZOOM_SDK_KEY', 'ZOOM_SDK_SECRET', 'ZOOM_HOST_EMAIL']) {
       assert.ok(s.indexOf(name) > tests, `${f}: ${name} must only be given to the step after the tests`)
       assert.match(s, new RegExp(`^\\s+${name}:\\s*\\$\\{\\{\\s*secrets\\.${name}\\s*\\}\\}\\s*$`, 'm'), `${f}: ${name} must be a secret environment entry`)
@@ -201,7 +203,7 @@ test('workflows: the "run failed" step runs last, only on a failure, skips the b
     const step = s.slice(s.lastIndexOf('- name:', at))
     assert.match(step, /^\s+if:\s*failure\(\)\s*&&\s*github\.event_name != 'schedule'\s*$/m, `${f}: the failure step must only run on a failure, and not for the schedule`)
     assert.deepEqual([...step.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((m) => m[1]), ['REPORT_WEBHOOK_URL'], `${f}: the failure step may only be given the report address`)
-    assert.ok(!/ZOOM_SESSION|NEW_HOST_NAME|ZOOM_ACCOUNT_ID|ZOOM_S2S_|ZOOM_SDK_|ZOOM_HOST_EMAIL/.test(step), `${f}: the failure step must not see the login, the Zoom API credentials or the host's name`)
+    assert.ok(!/ZOOM_SESSION|NEW_HOST_NAME|BACKUP_HOST_NAMES|ZOOM_ACCOUNT_ID|ZOOM_S2S_|ZOOM_SDK_|ZOOM_HOST_EMAIL/.test(step), `${f}: the failure step must not see the login, the Zoom API credentials or the host names`)
   }
 })
 

@@ -16,6 +16,7 @@ const { dueMeetings } = require('../../src/upcoming')
 const { loadConfig, loadDotEnv, ALLOWED_KEYS, PARENT_ALLOWED_KEYS } = require('../../src/config')
 const { chromeEnv, ZoomBrowserDriver } = require('../../src/browserDriver')
 const { scrub } = require('../../src/log')
+const { encodeSession } = require('../../src/session')
 const os = require('os')
 
 const CS = ['client', 'VALUE', '9'].join('-') // built, not written out: the repo guard bans credential-looking literals
@@ -59,6 +60,13 @@ test('config: API mode needs no Zoom login, wins over a session, and the six set
   assert.throws(() => loadConfig({}), /ZOOM_USERNAME, ZOOM_PASSWORD/, 'still refuses to start with no way in at all')
   assert.throws(() => loadConfig({ ZOOM_ACCOUNT_ID: 'only-one' }), /incomplete/i)
   for (const k of API_KEYS) assert.ok(ALLOWED_KEYS.has(k), `${k} can be read from an env file`)
+})
+
+test('config: in API mode a leftover saved login is ignored (even a broken one), so Chrome is never given its cookies', () => {
+  const session = encodeSession([{ name: 'a', value: 'b', domain: '.zoom.us', path: '/' }])
+  assert.equal(loadConfig({ ...ENV, ZOOM_SESSION: session }).session, null)
+  assert.equal(loadConfig({ ...ENV, ZOOM_SESSION: 'not-a-session' }).session, null)
+  assert.equal(loadConfig({ ZOOM_SESSION: session }).session.length, 1, 'without the API credentials the saved login still works')
 })
 
 test('chrome environment: every ZOOM_* setting, the host name and the report address are removed; everything else is kept', () => {

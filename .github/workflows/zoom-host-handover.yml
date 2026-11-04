@@ -61,6 +61,14 @@ jobs:
         run: node src/cli.js --tick $TICK_ARGS
         env:
           ZOOM_SESSION: ${{ secrets.ZOOM_SESSION }}
+          # The permanent way in: Zoom API credentials that never expire (README, "No login at all"). When all six are set they are
+          # used instead of ZOOM_SESSION, which dies about 15 hours after every sign-in. Unset secrets are simply empty.
+          ZOOM_ACCOUNT_ID: ${{ secrets.ZOOM_ACCOUNT_ID }}
+          ZOOM_S2S_CLIENT_ID: ${{ secrets.ZOOM_S2S_CLIENT_ID }}
+          ZOOM_S2S_CLIENT_SECRET: ${{ secrets.ZOOM_S2S_CLIENT_SECRET }}
+          ZOOM_SDK_KEY: ${{ secrets.ZOOM_SDK_KEY }}
+          ZOOM_SDK_SECRET: ${{ secrets.ZOOM_SDK_SECRET }}
+          ZOOM_HOST_EMAIL: ${{ secrets.ZOOM_HOST_EMAIL }}
           NEW_HOST_NAME: ${{ secrets.NEW_HOST_NAME }}
           # optional: where the bot sends its private "what happened" report (see README). Empty = no reports.
           REPORT_WEBHOOK_URL: ${{ secrets.REPORT_WEBHOOK_URL }}

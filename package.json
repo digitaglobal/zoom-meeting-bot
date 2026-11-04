@@ -8,6 +8,7 @@
     "tick": "node src/cli.js --tick",
     "tick:dry": "node src/cli.js --tick --dry-run",
     "export-session": "node scripts/export-session.js",
+    "check:sdk": "node scripts/check-sdk.js",
     "test": "node --test test/unit/*.test.js",
     "test:live": "node test/live-e2e.js --yes",
     "test:live-cli": "node test/live-cli.js --yes",

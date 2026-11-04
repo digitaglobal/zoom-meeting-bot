@@ -6,6 +6,8 @@
 function scrub(message) {
   return String(message)
     .replace(/https?:\/\/\S+/gi, '[link]')
+    .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]')
+    .replace(/[A-Za-z0-9_-]{32,}/g, '[token]') // a start key, signature or access token that ends up in an error message
     .replace(/(?<!\d)\d{3,4}[ -]?\d{3,4}[ -]?\d{3,4}(?!\d)/g, '[id]') // 9-12 digits, even when written "123 4567 8901"
 }
 

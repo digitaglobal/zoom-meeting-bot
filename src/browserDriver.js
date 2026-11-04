@@ -10,6 +10,17 @@ const { findChrome } = require('./config')
 const { toCookieParams } = require('./session')
 const { parseUpcoming } = require('./upcoming')
 
+// The environment Chrome is started with: a copy without anything secret or private to the bot. Every ZOOM_* setting (login, session,
+// API credentials, anything added later) goes, and the host's name and the report address. Case-insensitive, as Windows names are.
+function chromeEnv(env) {
+  const out = {}
+  for (const [k, v] of Object.entries(env || {})) {
+    if (/^zoom_/i.test(k) || /^(new_host_name|report_webhook_url)$/i.test(k)) continue
+    out[k] = v
+  }
+  return out
+}
+
 const HOME = 'https://app.zoom.us/wc/home'
 const UPCOMING = 'https://zoom.us/meeting#/upcoming'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -34,8 +45,7 @@ class ZoomBrowserDriver {
     if (this.cfg.ci) args.push('--no-sandbox', '--disable-dev-shm-usage') // a throwaway cloud machine
     // Chrome is started without the login in ITS environment, as a precaution. (This process still holds it, and on the cloud
     // Chrome runs without its sandbox, so a Chrome exploit delivered through Zoom's own pages is the residual risk.)
-    const env = { ...process.env }
-    for (const k of ['ZOOM_SESSION', 'ZOOM_PASSWORD', 'ZOOM_USERNAME', 'REPORT_WEBHOOK_URL']) delete env[k]
+    const env = chromeEnv(process.env)
     this.browser = await puppeteer.launch({
       executablePath: findChrome(this.cfg.chromePath),
       env,
@@ -267,15 +277,31 @@ class ZoomBrowserDriver {
   who(userId) { return this.cfg.quiet ? 'that person' : userId.slice(0, userId.lastIndexOf('#')) }
 
   // ---------- the participants panel ----------
-  async openParticipants() {
+  async openParticipants(waitMs = 8000) {
     const hasRows = () => this.inMeeting(() => !!document.querySelector('.participants-item-position'))
+    const waitForRows = async (ms) => {
+      const end = Date.now() + ms
+      while (Date.now() < end) { if (await hasRows()) return true; await sleep(400) }
+      return false
+    }
+    // The footer button is a toggle. While the panel is already open its rows are briefly missing whenever Zoom redraws the
+    // list (someone joins), and clicking then would close the panel (seen live 2026-11-04). So never click an open panel.
+    const panelOpen = () => this.inMeeting(() => {
+      const p = document.querySelector('.participants-section-container')
+      if (!p) return false
+      const r = p.getBoundingClientRect()
+      return r.width > 0 && r.height > 0
+    })
     if (await hasRows()) return
+    if (await panelOpen()) {
+      if (await waitForRows(waitMs)) return
+      throw new Error('Could not open the participants list.')
+    }
     await this.inMeeting(() => {
       const b = [...document.querySelectorAll('button')].find((e) => /^open/i.test(e.getAttribute('aria-label') || '') && /participants list pane/i.test(e.getAttribute('aria-label') || ''))
       if (b) b.click()
     })
-    const end = Date.now() + 8000
-    while (Date.now() < end) { if (await hasRows()) return; await sleep(400) }
+    if (await waitForRows(waitMs)) return
     throw new Error('Could not open the participants list.')
   }
 
@@ -389,4 +415,4 @@ class ZoomBrowserDriver {
   }
 }
 
-module.exports = { ZoomBrowserDriver }
+module.exports = { ZoomBrowserDriver, chromeEnv }

@@ -47,6 +47,11 @@ variable `MEETING_FILTER` (a pattern; `.*` means every meeting).
 
 1. **Create the secret.** On a computer where the bot is already signed in to Zoom, run `npm run export-session`.
    It packs the Zoom login into one line of text and copies it to your clipboard (nothing is printed).
+   If the bot is not signed in (or the login has expired), open the bot's own browser at Zoom's sign-in page with
+   `npm start -- --headed`, sign in by hand with email and password, and **tick "Stay signed in"** before you submit.
+   **Warning (checked 2026-11-03): the tick does NOT make the login last.** Zoom ends the login about 15 hours after
+   sign-in, and the "remember me" cookies (about 90 days) do not bring it back, in the cloud or on a PC. Until a permanent
+   fix is in place the login must be renewed at least every ~14 hours (see PROJECT_NOTES.md section 12).
 2. **Add it to GitHub:** *Settings -> Secrets and variables -> Actions -> New repository secret*, name `ZOOM_SESSION`,
    paste. Then delete `~/.zoom-meeting-bot/session.b64`.
 3. **Fork protection:** *Settings -> Actions -> General -> "Fork pull request workflows from outside collaborators"*
@@ -86,6 +91,55 @@ Zoom and starts nothing; it only sends a report titled "TEST - not a real interv
 Everything is Jamaica time (UTC-5, no daylight saving). Zoom shows meeting times in the account's own time zone, which
 must be the same; set `ZOOM_TIMEZONE` otherwise. Log lines are stamped with Jamaica time. The cron hours in the
 workflow file are UTC (11:00-00:59 UTC = 06:00-19:59 Jamaica).
+
+## No login at all (the permanent fix, free)
+
+A Zoom *login* dies about 15 hours after sign-in, whatever "Stay signed in" says (checked 2026-11-03: three logins, and the
+"remember me" cookies cannot bring it back). So the bot can instead use Zoom's own API credentials, which never expire and cost
+nothing. Each run it asks Zoom for the meeting list and for a fresh 2-hour "host start key" and starts the meeting through
+Zoom's Meeting SDK (`src/sdkDriver.js`). No password, no captcha, no saved login. When all six settings below are present they
+are used instead of `ZOOM_SESSION`; with none of them set, everything works as before.
+
+**One-time setup (a Zoom account owner or admin, about 10 minutes).** Zoom changes its Marketplace screens now and then; if a
+name below differs slightly, pick the closest one.
+1. Sign in at <https://marketplace.zoom.us> with the Zoom account, then **Develop -> Build App**. No "Develop" menu means this
+   user is not an admin of the Zoom account: hand these steps to whoever is.
+2. Build a **Server-to-Server OAuth** app (any name, for example "Interview host bot"). Copy its **Account ID**, **Client ID** and
+   **Client Secret**. Under **Scopes** add: `user:read:zak:admin`, `user:read:token:admin`, `meeting:read:list_meetings:admin`
+   (if Zoom says another scope is missing, the bot's error message names it). Then **Activate** the app.
+3. Build a **General App** with **Meeting SDK** switched on (menu "Embed" -> "Meeting SDK"; older screens call this app type
+   "Meeting SDK"). Placeholder URLs (for example `https://example.com`) are fine for the required URL fields: it is only used by
+   your own account. Copy its **Client ID** (= SDK key) and **Client Secret** (= SDK secret) from "App Credentials" (Development).
+4. The 6 values, plus the e-mail address of the Zoom user who owns the interview meetings (the account the bot used to log in as):
+
+   | setting | value |
+   |---|---|
+   | `ZOOM_ACCOUNT_ID` | Account ID (app 1) |
+   | `ZOOM_S2S_CLIENT_ID` / `ZOOM_S2S_CLIENT_SECRET` | Client ID / Client Secret (app 1) |
+   | `ZOOM_SDK_KEY` / `ZOOM_SDK_SECRET` | Client ID / Client Secret (app 2) |
+   | `ZOOM_HOST_EMAIL` | the meetings' owner |
+
+   Locally: put them in `.env` (see `.env.example`; the file is git-ignored). On GitHub: **Settings -> Secrets and variables ->
+   Actions -> New repository secret**, one secret per name. Never paste them in a chat, an issue or a commit.
+5. Check, starting nothing: `npm run check:sdk` (Zoom's SDK page starts in Chrome; needs no credentials) and `npm run tick:dry`
+   (prints "The Zoom API credentials work" when sign-in, the meeting list and the host start key all succeed).
+6. One real test: book a test meeting a few minutes ahead, then `node src/cli.js --meeting <its number> --headed`, join as the new host.
+
+**What to know about these credentials (security review, 2026-11-03).**
+- They never expire, so they are worth more than the old login cookie. The Server-to-Server app's scopes cover the whole Zoom account (it
+  could issue a start key for any user), so treat the six values like a password, rotate them if they ever leak (regenerate the secret in the
+  Marketplace app, update the GitHub secret), and never reuse them elsewhere.
+- Residual risk, accepted for now: on GitHub the bot's Chrome runs without its sandbox and Chrome renders content from other meeting
+  participants, so a Chrome exploit could read the bot's environment. Chrome itself is started without any `ZOOM_*` value. Options to
+  shrink it later: re-enable Chrome's sandbox on the runner, or split the run so the step with Chrome only gets the short-lived start key.
+- Zoom's SDK script is loaded from Zoom (`source.zoom.us`) at one pinned version (`src/sdkPage.js`). Zoom receives the start key anyway,
+  but review the pin now and then, because Zoom retires old versions.
+- The API credentials are read only from this folder's `.env` or the environment, never from the parent app's `../.env.local` (that file
+  uses some of the same names for a different Zoom app). This folder sits in OneDrive, so `.env` syncs to the cloud like `.profile/` does.
+
+Unproven until the first live run with real credentials (2026-11-03): that Zoom's SDK meeting screen has the same buttons the bot
+presses (participants list, Admit, Make Host, Leave); the `npm run check:sdk` result only proves the SDK page starts. If a selector
+differs, `src/browserDriver.js` is the one file to adjust. The hand-over rules and their tests are unchanged.
 
 ## Safety (on purpose)
 

@@ -6,8 +6,15 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('fs')
 const path = require('path')
+const { spawnSync } = require('child_process')
 
 const ROOT = path.join(__dirname, '..', '..')
+// What git would commit (tracked + untracked-not-ignored): the local git-ignored .env is not one of them; a broken .gitignore would put it back in.
+const COMMITTABLE = (() => {
+  const r = spawnSync('git', ['ls-files', '-z', '-c', '-o', '--exclude-standard'], { cwd: ROOT, encoding: 'utf8' })
+  return r.status === 0 ? new Set(r.stdout.split('\0').filter(Boolean)) : null
+})()
+const committable = (rel) => !COMMITTABLE || COMMITTABLE.has(rel)
 const WORKFLOWS = path.join(ROOT, '.github', 'workflows')
 const files = fs.existsSync(WORKFLOWS) ? fs.readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f)) : []
 const read = (f) => fs.readFileSync(path.join(WORKFLOWS, f), 'utf8')
@@ -88,6 +95,7 @@ test('repository: no credential, saved session or browser profile is committed',
   }
   for (const p of walk(ROOT)) {
     const rel = path.relative(ROOT, p).replace(/\\/g, '/')
+    if (!committable(rel)) continue
     assert.ok(!/(^|\/)\.env(\.|$)/.test(rel) || /\.env\.example$/.test(rel), `${rel} looks like a real .env file`)
     assert.ok(!/session\.b64|\.session/.test(rel), `${rel} looks like a saved session`)
     assert.ok(!/\.(png|jpe?g|pem|key|p12|pfx)$/i.test(rel), `${rel} is a binary file that could hold private data`)
@@ -113,6 +121,7 @@ test('repository: no committed file contains a password, a token, or someone\'s 
   ]
   for (const p of walk(ROOT)) {
     const rel = path.relative(ROOT, p).replace(/\\/g, '/')
+    if (!committable(rel)) continue
     if (rel === 'test/unit/workflow-safety.test.js') continue // this file contains the patterns themselves
     const s = fs.readFileSync(p, 'utf8')
     for (const [re, what] of patterns) assert.ok(!re.test(s), `${rel} contains ${what}`)
@@ -140,6 +149,7 @@ test('repository: the public files contain no real-looking Zoom meeting number (
   const FAKE = /^(1110{4,6}\d{3}|1112223333|4445556666|(\d)\2{8,10}|12345678\d{1,4}|123456789\d{0,3}|1\d00000000)$/
   for (const p of walk(ROOT)) {
     const rel = path.relative(ROOT, p).replace(/\\/g, '/')
+    if (!committable(rel)) continue
     const s = fs.readFileSync(p, 'utf8')
     for (const m of s.matchAll(/(?<!\d)(\d{3,4})[ -]?(\d{3,4})[ -]?(\d{3,4})(?!\d)/g)) {
       const digits = m[0].replace(/\D/g, '')
@@ -157,6 +167,10 @@ test('workflows: the tests run BEFORE the login is used, so a broken safety rule
     assert.ok(tests > 0 && tick > 0, `${f} must run npm test and the bot`)
     assert.ok(tests < tick, `${f} must run the tests before the bot`)
     assert.ok(s.indexOf('ZOOM_SESSION') > tests, `${f}: the secret must only be given to the step after the tests`)
+    for (const name of ['ZOOM_ACCOUNT_ID', 'ZOOM_S2S_CLIENT_ID', 'ZOOM_S2S_CLIENT_SECRET', 'ZOOM_SDK_KEY', 'ZOOM_SDK_SECRET', 'ZOOM_HOST_EMAIL']) {
+      assert.ok(s.indexOf(name) > tests, `${f}: ${name} must only be given to the step after the tests`)
+      assert.match(s, new RegExp(`^\\s+${name}:\\s*\\$\\{\\{\\s*secrets\\.${name}\\s*\\}\\}\\s*$`, 'm'), `${f}: ${name} must be a secret environment entry`)
+    }
   }
 })
 
@@ -187,7 +201,7 @@ test('workflows: the "run failed" step runs last, only on a failure, skips the b
     const step = s.slice(s.lastIndexOf('- name:', at))
     assert.match(step, /^\s+if:\s*failure\(\)\s*&&\s*github\.event_name != 'schedule'\s*$/m, `${f}: the failure step must only run on a failure, and not for the schedule`)
     assert.deepEqual([...step.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((m) => m[1]), ['REPORT_WEBHOOK_URL'], `${f}: the failure step may only be given the report address`)
-    assert.ok(!/ZOOM_SESSION|NEW_HOST_NAME/.test(step), `${f}: the failure step must not see the login or the host's name`)
+    assert.ok(!/ZOOM_SESSION|NEW_HOST_NAME|ZOOM_ACCOUNT_ID|ZOOM_S2S_|ZOOM_SDK_|ZOOM_HOST_EMAIL/.test(step), `${f}: the failure step must not see the login, the Zoom API credentials or the host's name`)
   }
 })
 

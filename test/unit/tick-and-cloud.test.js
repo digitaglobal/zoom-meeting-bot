@@ -178,8 +178,9 @@ test('source rules from the review: Chrome gets no login, Make Host names the ex
   const path = require('path')
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', '..', 'src', f), 'utf8')
   const driver = src('browserDriver.js')
-  assert.match(driver, /delete env\[k\]/)
-  assert.match(driver, /'ZOOM_SESSION', 'ZOOM_PASSWORD', 'ZOOM_USERNAME'/)
+  assert.ok(driver.includes('env = chromeEnv(process.env)'), 'Chrome is started with the filtered environment')
+  const filtered = require('../../src/browserDriver').chromeEnv({ ZOOM_SESSION: 'a', ZOOM_PASSWORD: 'b', ZOOM_USERNAME: 'c', PATH: 'p' })
+  assert.deepEqual(Object.keys(filtered), ['PATH'], 'Chrome gets no login')
   assert.ok(driver.includes('change the host to ([^?]{1,120})\\?/'), 'the confirmation must name exactly the intended person')
   // fail closed and scoped: no looser fallback, and the text is read from the dialog around the Yes button, not the page
   assert.ok(!/text\.includes\(`change the host to/.test(driver), 'no looser "includes" fallback for the confirmation')

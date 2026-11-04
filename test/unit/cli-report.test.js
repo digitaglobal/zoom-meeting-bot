@@ -30,6 +30,7 @@ const env = (extra = {}) => ({
   ZOOM_SESSION: encodeSession([{ name: 'a', value: 'b', domain: '.zoom.us', path: '/' }]),
   NEW_HOST_NAME: 'Kemal Example', REPORT_WEBHOOK_URL: HOOK,
   MEETING_FILTER: 'interview', LEAD_MINUTES: '15', LATE_MINUTES: '5', ZOOM_TIMEZONE: 'America/Jamaica', WAIT_FOR_NEW_HOST_SECONDS: '3600',
+  ZOOM_ACCOUNT_ID: '', ZOOM_S2S_CLIENT_ID: '', ZOOM_S2S_CLIENT_SECRET: '', ZOOM_SDK_KEY: '', ZOOM_SDK_SECRET: '', ZOOM_HOST_EMAIL: '', // a developer's real .env must never switch these runs to the SDK driver
   FAKE_SCENARIO: 'ok', ...extra,
 })
 const run = (args, extra) => {

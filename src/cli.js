@@ -11,6 +11,8 @@
 //   node src/cli.js --hidden / --headed  run the browser without / with a window
 const { loadEnvFiles, loadConfig } = require('./config')
 const { ZoomBrowserDriver } = require('./browserDriver')
+const { ZoomSdkDriver } = require('./sdkDriver')
+const { createZoomApi } = require('./zoomApi')
 const { runHandover } = require('./handover')
 const { runTick } = require('./tick')
 const { makeLog, scrub } = require('./log')
@@ -35,6 +37,12 @@ function parseArgs(argv) {
   return out
 }
 
+// On GitHub, a value printed as "::add-mask::value" is hidden from then on. Used for the secrets made DURING the run (the registered
+// secrets are masked already). Only ever done on GitHub, so a local run never echoes a secret.
+function maskInGithubLog(value) {
+  if (process.env.GITHUB_ACTIONS && /^[!-~]+$/.test(value)) console.log(`::add-mask::${value}`)
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) { console.log('See the header of src/cli.js, or the README.'); return 0 }
@@ -48,7 +56,9 @@ async function main() {
   if (args.dryRun && !args.tick) throw new Error('--dry-run only works together with --tick')
 
   const log = makeLog({ quiet: cfg.quiet, timeZone: cfg.timeZone })
-  const driver = new ZoomBrowserDriver(cfg, log)
+  // With the Zoom API credentials there is no login to expire: meetings come from the API and start through the SDK.
+  const driver = cfg.api ? new ZoomSdkDriver(cfg, createZoomApi(cfg.api, { onSecret: maskInGithubLog }), log) : new ZoomBrowserDriver(cfg, log)
+  if (cfg.api) log('Using the Zoom API credentials (no Zoom login needed).')
   if (cfg.reportAddressProblem) log('REPORT_WEBHOOK_URL is set but is not a valid https address, so no reports will be sent.')
   const startedAt = new Date()
   // A private report (see report.js). The backup schedule stays quiet about plain errors, so a dead login is not announced
@@ -69,6 +79,8 @@ async function main() {
   let result
   try {
     if (args.tick) {
+      // The dry run is the hourly login check: with API credentials it proves every permission (sign in, list, host start key).
+      if (args.dryRun && driver.verify) { const v = await driver.verify(); log(`The Zoom API credentials work (${cfg.quiet ? 'meetings listed' : v.meetings + ' upcoming meeting(s)'}, host start key issued).`) }
       result = await runTick(driver, cfg, { dryRun: args.dryRun }, { log })
       if (result.action !== 'handover') { await driver.close(); return 0 }
     } else {

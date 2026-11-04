@@ -6,23 +6,29 @@ const os = require('os')
 const path = require('path')
 const { decodeSession } = require('./session')
 const { parseReportUrl } = require('./report')
+const { API_KEYS, parseApiCredentials } = require('./zoomApi')
 
 // Only these settings are ever read from an env file. Anything else in the file (another project's secrets) is ignored,
 // so it can never end up in this process or in the browser's environment.
-const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL'])
+const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
 
-function loadDotEnv(file, env = process.env) {
+function loadDotEnv(file, env = process.env, allowed = ALLOWED_KEYS) {
   if (!fs.existsSync(file)) return
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line)
-    if (!m || line.trim().startsWith('#') || !ALLOWED_KEYS.has(m[1])) continue
+    if (!m || line.trim().startsWith('#') || !allowed.has(m[1])) continue
     if (env[m[1]] === undefined) env[m[1]] = m[2].replace(/^"(.*)"$/, '$1')
   }
 }
 
+// The Zoom API credentials are read ONLY from this folder's own .env (or the environment), never from the parent app's
+// ../.env.local: that file uses some of the same names (ZOOM_ACCOUNT_ID, ZOOM_S2S_*, ZOOM_HOST_EMAIL) for a different Zoom app,
+// and the bot must not silently borrow those or fail on a half-matching set.
+const PARENT_ALLOWED_KEYS = new Set([...ALLOWED_KEYS].filter((k) => !API_KEYS.includes(k)))
+
 function loadEnvFiles(env = process.env) {
   loadDotEnv(path.join(__dirname, '..', '.env'), env)
-  loadDotEnv(path.join(__dirname, '..', '..', '.env.local'), env)
+  loadDotEnv(path.join(__dirname, '..', '..', '.env.local'), env, PARENT_ALLOWED_KEYS)
 }
 
 const CHROME_CANDIDATES = [
@@ -59,8 +65,10 @@ function loadConfig(env = process.env) {
   const username = String(env.ZOOM_USERNAME ?? '').trim()
   const password = String(env.ZOOM_PASSWORD ?? '')
   const rawSession = String(env.ZOOM_SESSION ?? '').trim()
-  // A saved session is enough on its own (that is how the cloud run works); otherwise a login is required.
-  if (!rawSession) {
+  // The Zoom API credentials (all six, or none) need no login at all: that is the permanent way in and it wins over a saved session.
+  const api = parseApiCredentials(env)
+  // Otherwise a saved session is enough on its own (the older cloud way, it expires in ~15 h); otherwise a login is required.
+  if (!rawSession && !api) {
     const missing = [!username && 'ZOOM_USERNAME', !password.trim() && 'ZOOM_PASSWORD'].filter(Boolean)
     if (missing.length) throw new Error(`Missing settings: ${missing.join(', ')} (put them in a .env file; see .env.example)`)
   }
@@ -87,6 +95,7 @@ function loadConfig(env = process.env) {
     password,
     canSignInWithPassword: !!(username && password.trim()),
     session: rawSession ? decodeSession(rawSession) : null,
+    api, // { accountId, clientId, clientSecret, sdkKey, sdkSecret, hostEmail } or null. Secrets: never print this object.
     newHostName,
     waitSeconds,
     chromePath: (env.CHROME_PATH || '').trim(),
@@ -107,4 +116,4 @@ function loadConfig(env = process.env) {
   }
 }
 
-module.exports = { loadDotEnv, loadEnvFiles, loadConfig, findChrome, CHROME_CANDIDATES, ALLOWED_KEYS }
+module.exports = { loadDotEnv, loadEnvFiles, loadConfig, findChrome, CHROME_CANDIDATES, ALLOWED_KEYS, PARENT_ALLOWED_KEYS }

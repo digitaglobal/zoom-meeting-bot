@@ -206,7 +206,8 @@ test('tick: the result of a hand-over carries the meeting (so the report can nam
 
 test('source rules: the report address stays out of Chrome and out of every log line', () => {
   const src = (f) => fs.readFileSync(path.join(__dirname, '..', '..', 'src', f), 'utf8')
-  assert.match(src('browserDriver.js'), /'ZOOM_SESSION', 'ZOOM_PASSWORD', 'ZOOM_USERNAME', 'REPORT_WEBHOOK_URL'/, 'Chrome is started without the report address')
+  assert.ok(src('browserDriver.js').includes('env = chromeEnv(process.env)'), 'Chrome is started with the filtered environment')
+  assert.equal(require('../../src/browserDriver').chromeEnv({ REPORT_WEBHOOK_URL: 'x', PATH: 'p' }).REPORT_WEBHOOK_URL, undefined, 'Chrome is started without the report address')
   for (const f of ['cli.js', 'report.js', 'report-failure.js']) {
     // (a message may name the setting; it must never print its value)
     assert.ok(!/(log|console\.\w+)\([^)]*(\.reportUrl|\burl\b|env\.REPORT_WEBHOOK_URL)/.test(src(f)), `${f} must never print the report address`)

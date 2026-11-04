@@ -73,7 +73,8 @@ function dueMeetings(meetings, now, opts = {}) {
   return meetings
     .filter((m) => m.id && isStartable(m))
     .filter((m) => !filter || filter.test(m.title))
-    .map((m) => ({ ...m, startsInMinutes: clockToMinutes(m.start) - nowMin }))
+    // A row from Zoom's API carries the exact start (startMs); a scraped row only has the clock text for today.
+    .map((m) => ({ ...m, startsInMinutes: Number.isFinite(m.startMs) ? (m.startMs - now.getTime()) / 60000 : clockToMinutes(m.start) - nowMin }))
     .filter((m) => Number.isFinite(m.startsInMinutes) && m.startsInMinutes <= leadMinutes && m.startsInMinutes >= -lateMinutes)
     .sort((a, b) => a.startsInMinutes - b.startsInMinutes) // the most overdue meeting first
 }

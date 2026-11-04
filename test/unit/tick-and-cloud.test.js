@@ -60,10 +60,10 @@ test('tick: --dry-run says what would happen and starts nothing', async () => {
   assert.equal(handovers.length, 0)
 })
 
-test("tick: the filter keeps non-interview meetings out unless it is switched off", async () => {
-  let s = setup(at(10, 52))
+test("tick: every meeting is handled by default; a title pattern can still narrow it", async () => {
+  let s = setup(at(10, 52), { MEETING_FILTER: 'interview' })
   assert.equal((await runTick(makeDriver(), s.cfg, {}, s.deps)).action, 'nothing-due')
-  s = setup(at(10, 52), { MEETING_FILTER: '.*' })
+  s = setup(at(10, 52))
   assert.equal((await runTick(makeDriver(), s.cfg, {}, s.deps)).action, 'handover')
   assert.deepEqual(s.handovers[0].start, { meetingId: '1110000005' })
 })
@@ -131,8 +131,10 @@ test('config: schedule settings have the agreed defaults and refuse nonsense', (
   assert.equal(c.leadMinutes, 10)
   assert.equal(c.lateMinutes, 5)
   assert.equal(c.timeZone, 'America/Jamaica')
-  assert.ok(c.meetingFilter.test('Ann Admin Assistant INTERVIEW'))
-  assert.ok(!c.meetingFilter.test('Team lunch'))
+  assert.equal(c.meetingFilter, null, 'by default every meeting is handled, whatever its title')
+  const narrowed = loadConfig({ ...baseEnv, MEETING_FILTER: 'interview' }).meetingFilter
+  assert.ok(narrowed.test('Ann Admin Assistant INTERVIEW'))
+  assert.ok(!narrowed.test('Team lunch'))
   assert.equal(loadConfig({ ...baseEnv, MEETING_FILTER: '.*' }).meetingFilter, null)
   assert.throws(() => loadConfig({ ...baseEnv, MEETING_FILTER: '(' }), /not a valid pattern/)
   assert.throws(() => loadConfig({ ...baseEnv, LEAD_MINUTES: '-1' }), /LEAD_MINUTES/)

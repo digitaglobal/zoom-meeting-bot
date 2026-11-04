@@ -72,7 +72,8 @@ jobs:
           NEW_HOST_NAME: ${{ secrets.NEW_HOST_NAME }}
           # optional: where the bot sends its private "what happened" report (see README). Empty = no reports.
           REPORT_WEBHOOK_URL: ${{ secrets.REPORT_WEBHOOK_URL }}
-          MEETING_FILTER: ${{ vars.MEETING_FILTER || 'interview' }}
+          # every meeting on the Zoom account is handled, whatever its title (fixed here on purpose: no repository variable can narrow it)
+          MEETING_FILTER: '.*'
           # a meeting is started when it begins within 15 minutes; a timer 10 minutes ahead starts it then, the backup
           # schedule (every 10 minutes) starts it 15 to 5 minutes ahead
           LEAD_MINUTES: '15'

@@ -34,14 +34,10 @@ The workflow `.github/workflows/zoom-host-handover.yml` runs `node src/cli.js --
   that means a meeting is started 15 to 5 minutes before its start, **about 10 minutes early on average** (GitHub cannot
   promise an exact minute). A meeting that is already running is never touched.
 
-By default only meetings whose title contains **"interview"** are handled. Change that with the repository
-variable `MEETING_FILTER` (a pattern; `.*` means every meeting).
+**Every meeting on the Zoom account is handled, whatever its title.** The cloud workflow fixes `MEETING_FILTER` to `.*` (a repository
+variable cannot narrow it). Locally, `MEETING_FILTER` in `.env` can still limit a run to titles matching a pattern.
 
-> **Repository variables are visible in the run log.** Put only a pattern there, never anything private. The host's name is a
-> *secret* (`NEW_HOST_NAME`), so GitHub hides it in the log, and the bot itself never writes it there.
-> Use a title convention **you** control for `MEETING_FILTER` (for example a fixed word you put in the title): if a
-> public booking page builds titles from what the booker types, a booker could type the word and make the bot start
-> their meeting.
+> The host's name is a *secret* (`NEW_HOST_NAME`), so GitHub hides it in the log, and the bot itself never writes it there.
 
 ### One-time setup
 

@@ -81,7 +81,7 @@ function loadConfig(env = process.env) {
   if (!newHostName) throw new Error('NEW_HOST_NAME cannot be empty')
 
   let meetingFilter = null
-  const filterText = String(env.MEETING_FILTER ?? 'interview').trim()
+  const filterText = String(env.MEETING_FILTER ?? '.*').trim()
   if (filterText && filterText !== '.*') {
     if (filterText.length > 100) throw new Error('MEETING_FILTER is too long')
     try { meetingFilter = new RegExp(filterText, 'i') } catch { throw new Error('MEETING_FILTER is not a valid pattern') }

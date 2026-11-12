@@ -9,7 +9,7 @@
 //
 // Safety rules: only the person who matches the name is ever admitted or made host, and the bot only leaves
 // once Zoom shows the new host. If anything is unclear, it stays.
-const { findNewHost, hostTransferred } = require('./participants')
+const { findNewHost, hostTransferred, norm } = require('./participants')
 
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -17,19 +17,38 @@ async function runHandover(driver, opts, deps = {}) {
   const sleep = deps.sleep || realSleep
   const now = deps.now || Date.now
   const log = deps.log || (() => {})
-  const { newHostName, backupHostNames = [], waitMs, pollMs = 2000, confirmMs = 20000, attempts = 2, onStarted, start, redactNames = true } = opts
-  // The first choice comes first. Whoever on the list is seen first gets host; if two are there at the same check, the earlier
-  // name on the list wins, so the first choice always beats a backup that happens to be in at the same moment.
-  const names = [newHostName, ...backupHostNames]
+  const { newHostName, backupHostNames = [], getRosterNames, rosterRefreshMs = 10 * 60 * 1000, waitMs, pollMs = 2000, confirmMs = 20000, attempts = 2, onStarted, start, redactNames = true } = opts
+  // The first choice comes first, then the fixed backups, then everyone currently active in Slack (getRosterNames, read again
+  // every few minutes so a change shows up during a long wait). Whoever on the list is seen first gets host; if two are there at
+  // the same check, the earlier name wins, so the first choice always beats everyone else that happens to be in at that moment.
+  const fixedNames = [newHostName, ...backupHostNames]
+  let names = fixedNames
+  let rosterAt = -Infinity
+  let rosterLogged = false
+  const refreshRoster = async () => {
+    if (!getRosterNames) return
+    rosterAt = now()
+    try {
+      const roster = await getRosterNames()
+      const seen = new Set(fixedNames.map(norm))
+      names = [...fixedNames]
+      for (const n of roster || []) { const k = norm(n); if (k && !seen.has(k)) { seen.add(k); names.push(n) } }
+      if (!rosterLogged) { rosterLogged = true; log(`Read the current Slack member list (${names.length - fixedNames.length} more people can be made host).`) }
+    } catch (e) {
+      // never fatal: the meeting is already live, so carry on with the names we have (the fixed list, or the last good roster)
+      log(`Could not read the Slack member list (${e && e.message ? e.message : 'unknown problem'}); using the names it already has.`)
+    }
+  }
   // Safe by default: a log must not show anyone's display name unless the caller (a local run) says it may.
   const who = (p) => (redactNames ? 'the new host' : p.userName)
   const upper = (t) => t.charAt(0).toUpperCase() + t.slice(1)
-  const label = redactNames ? 'the new host' : names.map((n) => `"${n}"`).join(' or ')
+  const label = redactNames ? 'the new host' : fixedNames.map((n) => `"${n}"`).join(' or ')
 
   log(start && start.meetingId ? 'Starting the scheduled meeting as host...' : 'Signing in and starting the meeting as host...')
   const info = await driver.join(start)
   if (onStarted) await onStarted(info)
   log(`Meeting started (ID ${info.meetingId}). Waiting for ${label} to arrive...`)
+  await refreshRoster()
 
   // 1. wait for exactly one person who fits; let them in from the waiting room if that is where they are
   const deadline = now() + waitMs
@@ -37,6 +56,7 @@ async function runHandover(driver, opts, deps = {}) {
   let usedBackup = false
   let warned = false
   while (now() < deadline) {
+    if (getRosterNames && now() - rosterAt >= rosterRefreshMs) await refreshRoster()
     const people = await driver.people()
     const me = people.find((p) => p.isMe)
     const exclude = me && me.userId

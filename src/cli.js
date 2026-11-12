@@ -12,6 +12,7 @@
 const { loadEnvFiles, loadConfig } = require('./config')
 const { ZoomBrowserDriver } = require('./browserDriver')
 const { ZoomSdkDriver } = require('./sdkDriver')
+const { fetchActiveNames } = require('./slackRoster')
 const { createZoomApi } = require('./zoomApi')
 const { runHandover } = require('./handover')
 const { runTick } = require('./tick')
@@ -60,6 +61,9 @@ async function main() {
   const driver = cfg.api ? new ZoomSdkDriver(cfg, createZoomApi(cfg.api, { onSecret: maskInGithubLog }), log) : new ZoomBrowserDriver(cfg, log)
   if (cfg.api) log('Using the Zoom API credentials (no Zoom login needed).')
   if (cfg.reportAddressProblem) log('REPORT_WEBHOOK_URL is set but is not a valid https address, so no reports will be sent.')
+  // Everyone currently active in Slack may be made host (read fresh each run). Off unless a read-only Slack token is set.
+  const getRosterNames = cfg.slackRosterToken ? () => fetchActiveNames(cfg.slackRosterToken) : undefined
+  if (getRosterNames) log('The Slack member list is on: every active member can be made host (first choice first).')
   const startedAt = new Date()
   // A private report (see report.js). The backup schedule stays quiet about plain errors, so a dead login is not announced
   // every 10 minutes (the hourly login check announces it); a meeting that was started is always reported.
@@ -81,12 +85,13 @@ async function main() {
     if (args.tick) {
       // The dry run is the hourly login check: with API credentials it proves every permission (sign in, list, host start key).
       if (args.dryRun && driver.verify) { const v = await driver.verify(); log(`The Zoom API credentials work (${cfg.quiet ? 'meetings listed' : v.meetings + ' upcoming meeting(s)'}, host start key issued).`) }
-      result = await runTick(driver, cfg, { dryRun: args.dryRun }, { log })
+      result = await runTick(driver, cfg, { dryRun: args.dryRun, getRosterNames }, { log })
       if (result.action !== 'handover') { await driver.close(); return 0 }
     } else {
       result = await runHandover(driver, {
         newHostName: cfg.newHostName,
         backupHostNames: cfg.backupHostNames,
+        getRosterNames,
         waitMs: cfg.waitSeconds * 1000,
         start: args.meeting ? { meetingId: args.meeting } : undefined,
         redactNames: cfg.quiet,

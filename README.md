@@ -49,6 +49,16 @@ backup has been made host the bot leaves, and a first choice who arrives later i
 backup name is refused, because it would also fit strangers who share that word. The list is a secret like the host's name:
 it is never printed, never given to Chrome, and a public log says only "a backup host" without naming anyone.
 
+**Everyone active in Slack (optional, live).** With a read-only Slack token in the secret `SLACK_ROSTER_TOKEN` (permission
+`users:read` and nothing else: make a small Slack app of its own, do **not** reuse the Paula bot's token, which can also post
+and read channels), every **active** member of the Slack workspace can be made host. The list is read fresh when the meeting starts
+and again every 10 minutes while the bot waits, so someone deactivated in Slack drops off and a new colleague is added with no
+setting to change. Rules: deactivated people, bots, Slackbot and **guests** are left out; only names of two or more real words count
+(a name such as "Jamie" or "Alex S" is skipped, because it would fit strangers or never match what Zoom shows); the order is
+`NEW_HOST_NAME`, then `BACKUP_HOST_NAMES`, then the Slack people, and whoever is seen first wins, the earlier name winning a tie. If Slack
+cannot be read the bot carries on with the fixed names and logs the Slack error code (never a name or the token). A person's Zoom display
+name must contain their Slack full name, so colleagues should join with their real full name.
+
 ### One-time setup
 
 1. **Create the secret.** On a computer where the bot is already signed in to Zoom, run `npm run export-session`.

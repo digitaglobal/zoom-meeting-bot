@@ -11,7 +11,7 @@ const { norm } = require('./participants')
 
 // Only these settings are ever read from an env file. Anything else in the file (another project's secrets) is ignored,
 // so it can never end up in this process or in the browser's environment.
-const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'BACKUP_HOST_NAMES', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
+const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'BACKUP_HOST_NAMES', 'SLACK_ROSTER_TOKEN','WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
 
 function loadDotEnv(file, env = process.env, allowed = ALLOWED_KEYS) {
   if (!fs.existsSync(file)) return
@@ -104,6 +104,9 @@ function loadConfig(env = process.env) {
   const newHostName = String(env.NEW_HOST_NAME || 'Kemal').trim()
   if (!newHostName) throw new Error('NEW_HOST_NAME cannot be empty')
   const backupHostNames = parseBackupNames(env.BACKUP_HOST_NAMES, newHostName, ci)
+  // Optional: a read-only Slack token (permission "users:read" only). With it, every active person in Slack can be made host.
+  const slackRosterToken = String(env.SLACK_ROSTER_TOKEN ?? '').trim()
+  if (slackRosterToken && !/^xox[a-z]-[A-Za-z0-9-]{10,300}$/.test(slackRosterToken)) throw new Error('SLACK_ROSTER_TOKEN is not a Slack token (it should start with "xoxb-")')
 
   let meetingFilter = null
   const filterText = String(env.MEETING_FILTER ?? '.*').trim()
@@ -124,6 +127,7 @@ function loadConfig(env = process.env) {
     api, // { accountId, clientId, clientSecret, sdkKey, sdkSecret, hostEmail } or null. Secrets: never print this object.
     newHostName,
     backupHostNames, // other people who get host if they are seen before the first choice (newHostName); never printed
+    slackRosterToken, // '' = off. A secret: never print this object.
     waitSeconds,
     chromePath: (env.CHROME_PATH || '').trim(),
     headed: env.HEADED === undefined ? false : truthy(env.HEADED),

@@ -73,6 +73,9 @@ jobs:
           # optional: more people who get host if they are seen before NEW_HOST_NAME (full display names, separated by commas or
           # new lines; the first choice still wins a tie). Empty = only NEW_HOST_NAME.
           BACKUP_HOST_NAMES: ${{ secrets.BACKUP_HOST_NAMES }}
+          # optional: a READ-ONLY Slack token (permission "users:read" only). With it every active member of the Slack workspace
+          # can be made host, read fresh on each run (someone who leaves Slack drops off). Empty = off.
+          SLACK_ROSTER_TOKEN: ${{ secrets.SLACK_ROSTER_TOKEN }}
           # optional: where the bot sends its private "what happened" report (see README). Empty = no reports.
           REPORT_WEBHOOK_URL: ${{ secrets.REPORT_WEBHOOK_URL }}
           # every meeting on the Zoom account is handled, whatever its title (fixed here on purpose: no repository variable can narrow it)

@@ -31,6 +31,7 @@ async function runTick(driver, cfg, opts = {}, deps = {}) {
   const result = await handover(driver, {
     newHostName: cfg.newHostName,
     backupHostNames: cfg.backupHostNames,
+    getRosterNames: opts.getRosterNames,
     waitMs: cfg.waitSeconds * 1000,
     start: { meetingId: meeting.id },
     redactNames: cfg.quiet,

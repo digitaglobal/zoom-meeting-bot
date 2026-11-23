@@ -7,9 +7,11 @@
 //   driver.makeHost(id)    Zoom's "Make Host" for one person (including the Yes confirmation)
 //   driver.leave()         leave the meeting; it must NEVER end it for everyone
 //
-// Safety rules: only the person who matches the name is ever admitted or made host, and the bot only leaves
-// once Zoom shows the new host. If anything is unclear, it stays.
-const { findNewHost, hostTransferred, norm } = require('./participants')
+// Safety rules: only a person who matches a staff name is ever admitted or made host, and the bot only leaves
+// once Zoom shows the new host. If anything is unclear, it stays. dryHandover logs the person it would
+// make host and never clicks Admit or Make Host.
+const { hostTransferred, pickFromPanel } = require('./participants')
+const { mergeStaff } = require('./staffList')
 
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -17,12 +19,14 @@ async function runHandover(driver, opts, deps = {}) {
   const sleep = deps.sleep || realSleep
   const now = deps.now || Date.now
   const log = deps.log || (() => {})
-  const { newHostName, backupHostNames = [], getRosterNames, rosterRefreshMs = 10 * 60 * 1000, waitMs, pollMs = 2000, confirmMs = 20000, attempts = 2, onStarted, start, redactNames = true } = opts
-  // The first choice comes first, then the fixed backups, then everyone currently active in Slack (getRosterNames, read again
-  // every few minutes so a change shows up during a long wait). Whoever on the list is seen first gets host; if two are there at
-  // the same check, the earlier name wins, so the first choice always beats everyone else that happens to be in at that moment.
-  const fixedNames = [newHostName, ...backupHostNames]
-  let names = fixedNames
+  const { newHostName, backupHostNames = [], staffEntries, staffOverrides, firstHostSlackId, getRosterNames, rosterRefreshMs = 10 * 60 * 1000, waitMs, pollMs = 2000, confirmMs = 20000, attempts = 2, onStarted, start, redactNames = true, dryHandover = false } = opts
+  // Fail-safe names are used until Slack answers, and again if Slack cannot be read.
+  // When the live roster arrives, it becomes the source of truth: the first host first (by Slack id, else by NEW_HOST_NAME), then any
+  // optional priority, then everyone else currently active. Whoever on that list is seen first gets host.
+  const fixedEntries = (staffEntries && staffEntries.length)
+    ? staffEntries.map((e) => ({ name: e.name, aliases: e.aliases || [], slackId: e.slackId || '' }))
+    : mergeStaff({ newHostName, backupHostNames, overrides: staffOverrides })
+  let entries = fixedEntries
   let rosterAt = -Infinity
   let rosterLogged = false
   const refreshRoster = async () => {
@@ -30,24 +34,28 @@ async function runHandover(driver, opts, deps = {}) {
     rosterAt = now()
     try {
       const roster = await getRosterNames()
-      const seen = new Set(fixedNames.map(norm))
-      names = [...fixedNames]
-      for (const n of roster || []) { const k = norm(n); if (k && !seen.has(k)) { seen.add(k); names.push(n) } }
-      if (!rosterLogged) { rosterLogged = true; log(`Read the current Slack member list (${names.length - fixedNames.length} more people can be made host).`) }
+      const list = roster || []
+      const rosterMembers = list.length && typeof list[0] === 'object' ? list : null
+      const rosterNames = list.length && typeof list[0] === 'string' ? list : []
+      entries = mergeStaff({ newHostName, backupHostNames, overrides: staffOverrides, rosterMembers, rosterNames, firstHostSlackId })
+      if (!rosterLogged) { rosterLogged = true; log(`Read the current Slack member list (${entries.length} people can be made host).`) }
     } catch (e) {
-      // never fatal: the meeting is already live, so carry on with the names we have (the fixed list, or the last good roster)
+      // never fatal: the meeting is already live, so carry on with the fail-safe names (or the last good roster)
       log(`Could not read the Slack member list (${e && e.message ? e.message : 'unknown problem'}); using the names it already has.`)
     }
   }
   // Safe by default: a log must not show anyone's display name unless the caller (a local run) says it may.
   const who = (p) => (redactNames ? 'the new host' : p.userName)
   const upper = (t) => t.charAt(0).toUpperCase() + t.slice(1)
-  const label = redactNames ? 'the new host' : fixedNames.map((n) => `"${n}"`).join(' or ')
+  const label = redactNames ? 'the new host' : fixedEntries.map((e) => `"${e.name}"`).join(' or ')
+  const kindLabel = (kind) => (kind === 'first-last-initial' ? 'first name and last initial' : kind || 'name')
 
   log(start && start.meetingId ? 'Starting the scheduled meeting as host...' : 'Signing in and starting the meeting as host...')
   const info = await driver.join(start)
   if (onStarted) await onStarted(info)
-  log(`Meeting started (ID ${info.meetingId}). Waiting for ${label} to arrive...`)
+  log(dryHandover
+    ? `Meeting started (ID ${info.meetingId}). Dry run: waiting to see who would be made host, and not clicking Admit or Make Host.`
+    : `Meeting started (ID ${info.meetingId}). Waiting for ${label} to arrive...`)
   await refreshRoster()
 
   // 1. wait for exactly one person who fits; let them in from the waiting room if that is where they are
@@ -55,6 +63,7 @@ async function runHandover(driver, opts, deps = {}) {
   let target = null
   let usedBackup = false
   let warned = false
+  let pickedKind = null
   while (now() < deadline) {
     if (getRosterNames && now() - rosterAt >= rosterRefreshMs) await refreshRoster()
     const people = await driver.people()
@@ -62,42 +71,67 @@ async function runHandover(driver, opts, deps = {}) {
     const exclude = me && me.userId
     const inside = people.filter((p) => !p.waiting)
     const outside = people.filter((p) => p.waiting)
-    const ambiguous = []
-    let admitted = false
-    for (let i = 0; i < names.length; i++) {
-      // a name that fits two people is skipped (never guessed); the next name on the list is still tried
-      const joined = findNewHost(inside, { name: names[i] }, { excludeUserId: exclude })
-      if (joined.match) { target = joined.match; usedBackup = i > 0; break }
-      const waiting = findNewHost(outside, { name: names[i] }, { excludeUserId: exclude })
-      if (waiting.match) {
-        log(`${i > 0 ? 'A backup host: ' : ''}${upper(who(waiting.match))} is in the waiting room. Letting them in.`)
-        await driver.admit(waiting.match.userId)
-        admitted = true
-        break
+    const picked = pickFromPanel({ inside, outside, entries, excludeUserId: exclude })
+    if (picked.match && !picked.waiting) { target = picked.match; usedBackup = picked.usedBackup; pickedKind = picked.kind; break }
+    if (picked.match && picked.waiting) {
+      if (dryHandover) {
+        log(`Dry run: would let ${picked.usedBackup ? 'a backup host: ' : ''}${who(picked.match)} in from the waiting room and make them host (matched as ${kindLabel(picked.kind)}). Not clicking.`)
+        return { ok: true, dryRun: true, wouldAdmit: true, wouldMakeHost: true, target: picked.match, usedBackup: picked.usedBackup, kind: picked.kind, staff: picked.staff, info }
       }
-      ambiguous.push(...joined.ambiguous, ...waiting.ambiguous)
+      log(`${picked.usedBackup ? 'A backup host: ' : ''}${upper(who(picked.match))} is in the waiting room. Letting them in.`)
+      await driver.admit(picked.match.userId)
+      // Re-read the panel until the admitted person shows up in the "in the meeting" list (up to ~20 seconds).
+      // The old fixed 1.5-second pause was often too short for the row (and its More button) to finish moving.
+      // Only the staff entry that was just admitted counts here, so a lower-priority person who happens to be
+      // inside already is never picked early; the outer loop still handles everyone else.
+      const insideUntil = now() + Math.min(20000, Math.max(0, deadline - now()))
+      while (now() < insideUntil) {
+        await sleep(500)
+        const fresh = await driver.people()
+        const meNow = fresh.find((p) => p.isMe)
+        const arrived = pickFromPanel({ inside: fresh.filter((p) => !p.waiting), outside: [], entries, excludeUserId: meNow && meNow.userId })
+        if (arrived.match && !arrived.waiting && arrived.staff === picked.staff) {
+          target = arrived.match; usedBackup = arrived.usedBackup; pickedKind = arrived.kind
+          break
+        }
+      }
+      if (target) break
+      continue
     }
-    if (target) break
-    if (admitted) { await sleep(1500); continue }
-    if (ambiguous.length && !warned) {
+    if (picked.ambiguous.length && !warned) {
       warned = true
-      log(`More than one person fits ${label} (${redactNames ? ambiguous.length + ' people' : ambiguous.map((a) => a.userName).join(', ')}). Not guessing; waiting for it to be clear.`)
+      log(`More than one person fits ${label} (${redactNames ? picked.ambiguous.length + ' people' : picked.ambiguous.map((a) => a.userName).join(', ')}). Not guessing; waiting for it to be clear.`)
     }
     await sleep(pollMs)
   }
   if (!target) return { ok: false, reason: 'new-host-not-found', detail: `${redactNames ? 'The new host' : label} did not arrive (or could not be told apart) within the wait time.`, info }
 
+  if (dryHandover) {
+    log(`Dry run: would make ${usedBackup ? 'a backup host: ' : ''}${who(target)} the host (matched as ${kindLabel(pickedKind)}). Not clicking.`)
+    return { ok: true, dryRun: true, wouldAdmit: false, wouldMakeHost: true, target, usedBackup, kind: pickedKind, info }
+  }
+
   // 2. hand over host, and wait for Zoom to show it
   log(`Found ${usedBackup ? 'a backup host: ' : ''}${who(target)}. Making them the host...`)
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    await driver.makeHost(target.userId)
+    try {
+      await driver.makeHost(target.userId)
+    } catch (e) {
+      const msg = e && e.message ? e.message : 'unknown problem'
+      log(`The new host was found, but the hand-over click failed (${msg}).`)
+      if (attempt < attempts) {
+        log(`Trying the menu again (try ${attempt} of ${attempts}).`)
+        continue
+      }
+      return { ok: false, reason: 'host-menu-failed', detail: 'The new host joined, but the bot could not open their participant menu to make them host. The bot is staying in the meeting as host: please check it now.', target, info }
+    }
     const until = now() + confirmMs
     while (now() < until) {
       const people = await driver.people()
       if (hostTransferred({ people, targetUserId: target.userId })) {
         log(`Zoom shows ${who(target)} as the host. Leaving the meeting (not ending it).`)
         await driver.leave()
-        return { ok: true, target, usedBackup, info }
+        return { ok: true, target, usedBackup, kind: pickedKind, info }
       }
       await sleep(1000)
     }

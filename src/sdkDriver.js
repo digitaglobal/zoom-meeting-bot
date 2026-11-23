@@ -72,6 +72,36 @@ class ZoomSdkDriver extends ZoomBrowserDriver {
     return { meetingId, link: `https://zoom.us/j/${meetingId}` }
   }
 
+  // Prefer ZoomMtg.makeHost when the Meeting SDK exposes it (this avoids the hover/menu click).
+  // The participants panel uses a made-up userId ("Name#1"), so the real Zoom id is looked up by display name.
+  // If the API is missing, fails, or is ambiguous, fall back to the inherited UI click (with retries).
+  async makeHostViaSdk(displayName) {
+    if (!this.page) return { ok: false, reason: 'no-page' }
+    try {
+      return await this.page.evaluate((nm) => {
+        if (!(window.__BOT_HOST && typeof window.__BOT_HOST.makeHostByName === 'function')) {
+          return Promise.resolve({ ok: false, reason: 'no-sdk-helper' })
+        }
+        return window.__BOT_HOST.makeHostByName(nm)
+      }, displayName)
+    } catch (e) {
+      return { ok: false, reason: 'sdk-evaluate-failed' }
+    }
+  }
+
+  async makeHost(userId) {
+    const name = userId.slice(0, userId.lastIndexOf('#'))
+    const viaSdk = await this.makeHostViaSdk(name)
+    if (viaSdk && viaSdk.ok) {
+      this.log('Asked Zoom\'s Meeting SDK to make them the host (no menu click).')
+      return this.confirmMakeHost(userId, { required: false, waitMs: 4000 })
+    }
+    if (viaSdk && viaSdk.reason && viaSdk.reason !== 'no-sdk-helper') {
+      this.log(`SDK makeHost was not used (${viaSdk.reason}); trying the participant menu.`)
+    }
+    return super.makeHost(userId)
+  }
+
   // The inherited leave() waits for the web app's address to change, which never happens here: wait for the SDK's own "left" page,
   // so the browser is not closed in the middle of leaving. (It still refuses to leave unless the bot is no longer the host.)
   async leave() {

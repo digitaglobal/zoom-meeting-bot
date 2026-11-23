@@ -73,9 +73,16 @@ jobs:
           # optional: more people who get host if they are seen before NEW_HOST_NAME (full display names, separated by commas or
           # new lines; the first choice still wins a tie). Empty = only NEW_HOST_NAME.
           BACKUP_HOST_NAMES: ${{ secrets.BACKUP_HOST_NAMES }}
-          # optional: a READ-ONLY Slack token (permission "users:read" only). With it every active member of the Slack workspace
-          # can be made host, read fresh on each run (someone who leaves Slack drops off). Empty = off.
+          # Slack token with permission "users:read". The live roster is the source of truth for who can be made host
+          # (someone who leaves Slack drops off, a new colleague is added). Empty = fail-safe names only.
           SLACK_ROSTER_TOKEN: ${{ secrets.SLACK_ROSTER_TOKEN }}
+          # optional: Slack user ids to skip on the roster (shared or test accounts, not people), comma-separated.
+          # Empty = nobody is skipped, so set it whenever SLACK_ROSTER_TOKEN is set. Ids only, never a token.
+          SLACK_ROSTER_EXCLUDE_IDS: ${{ secrets.SLACK_ROSTER_EXCLUDE_IDS }}
+          # optional: the Slack user id of the person who is first in line for host. Empty = the person named in NEW_HOST_NAME is first.
+          FIRST_HOST_SLACK_ID: ${{ secrets.FIRST_HOST_SLACK_ID }}
+          # optional: JSON overrides only (aliases, priority, extra exclusions). Empty = off.
+          STAFF_JSON: ${{ secrets.STAFF_JSON }}
           # optional: where the bot sends its private "what happened" report (see README). Empty = no reports.
           REPORT_WEBHOOK_URL: ${{ secrets.REPORT_WEBHOOK_URL }}
           # every meeting on the Zoom account is handled, whatever its title (fixed here on purpose: no repository variable can narrow it)

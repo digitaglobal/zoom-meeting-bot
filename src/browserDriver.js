@@ -9,13 +9,14 @@ const puppeteer = require('puppeteer-core')
 const { findChrome } = require('./config')
 const { toCookieParams } = require('./session')
 const { parseUpcoming } = require('./upcoming')
+const { attemptOpenMoreMenu, attemptClickMakeHostItem, runMakeHostClickLoop } = require('./makeHostMenu')
 
 // The environment Chrome is started with: a copy without anything secret or private to the bot. Every ZOOM_* setting (login, session,
 // API credentials, anything added later) goes, and the host's name and the report address. Case-insensitive, as Windows names are.
 function chromeEnv(env) {
   const out = {}
   for (const [k, v] of Object.entries(env || {})) {
-    if (/^zoom_/i.test(k) || /^(new_host_name|backup_host_names|slack_roster_token|report_webhook_url)$/i.test(k)) continue
+    if (/^zoom_/i.test(k) || /^(new_host_name|backup_host_names|slack_roster_token|slack_roster_exclude_ids|first_host_slack_id|staff_list_path|staff_json|report_webhook_url)$/i.test(k)) continue
     out[k] = v
   }
   return out
@@ -343,28 +344,46 @@ class ZoomBrowserDriver {
   }
 
   async makeHost(userId) {
-    await this.openParticipants()
-    const name = userId.slice(0, userId.lastIndexOf('#'))
-    const opened = await this.inMeeting((id) => {
-      const at = id.lastIndexOf('#')
-      const nm = id.slice(0, at)
-      const n = Number(id.slice(at + 1))
-      const rows = [...document.querySelectorAll('.participants-item-position')].filter((r) => ((r.querySelector('.participants-item__display-name') || {}).textContent || '').trim() === nm)
-      const row = rows[n - 1]
-      const btn = row && [...row.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'More options')
-      if (btn) { btn.click(); return true }
-      return false
-    }, userId)
-    if (!opened) throw new Error(`Could not open the menu for ${this.who(userId)}.`)
-    await sleep(900)
-    const picked = await this.inMeeting(() => {
-      const item = [...document.querySelectorAll('[role=menuitem],.dropdown-menu a,.dropdown-menu li a')].find((e) => /^make host$/i.test((e.textContent || '').trim()))
-      if (item) { item.click(); return true }
-      return false
+    // One click used to be all the bot tried. After someone is let in from the waiting room the
+    // row (and its hover-only More button) can take several seconds to appear, so this retries
+    // for about 20 seconds: keep the panel open, scroll the row into view, hover, then click,
+    // and try more than one selector for the menu button.
+    const opened = await runMakeHostClickLoop({
+      openPanel: () => this.openParticipants(),
+      openMenu: () => this.inMeeting(attemptOpenMoreMenu, userId),
+      clickItem: () => this.inMeeting(attemptClickMakeHostItem),
+      dismissMenu: async () => { try { await this.page.keyboard.press('Escape') } catch { /* already closed */ } },
+      sleep,
     })
-    if (!picked) { await this.page.keyboard.press('Escape'); throw new Error('Zoom did not offer "Make Host" for that person.') }
-    // Confirm ONLY if the dialog names the intended person.
-    const end = Date.now() + 10000
+    if (!opened.ok) {
+      const snippet = (opened.last && opened.last.snippet) || (opened.last && opened.last.reason) || 'unknown'
+      await this.captureMenuFailure('makehost-no-menu', snippet)
+      throw new Error(`Could not open the menu for ${this.who(userId)}.`)
+    }
+    return this.confirmMakeHost(userId, { required: true, waitMs: 10000 })
+  }
+
+  // A short, redacted note of what the page looked like when the menu click failed. Never includes a person's name.
+  async captureMenuFailure(label, snippet) {
+    const text = String(snippet || '')
+    this.log(`Make Host failed (${label}): ${text}`)
+    const shotFile = await this.shot(label)
+    if (shotFile) this.log(`Screenshot: ${shotFile}`)
+    if (this.cfg && this.cfg.screenshotDir) {
+      try {
+        fs.mkdirSync(this.cfg.screenshotDir, { recursive: true })
+        const file = path.join(this.cfg.screenshotDir, `${label}-${Date.now()}.txt`)
+        fs.writeFileSync(file, text)
+        this.log(`DOM snippet: ${file}`)
+      } catch { /* a missing folder must never stop the hand-over */ }
+    }
+  }
+
+  // Confirm ONLY if the dialog names the intended person. When the Meeting SDK has already
+  // requested the change, the dialog may not appear; required=false then waits a little and continues.
+  async confirmMakeHost(userId, { required = true, waitMs = 10000 } = {}) {
+    const name = userId.slice(0, userId.lastIndexOf('#'))
+    const end = Date.now() + waitMs
     while (Date.now() < end) {
       const clicked = await this.inMeeting((nm) => {
         // Read ONLY the confirmation dialog: the smallest block around the Yes button that holds the question.
@@ -383,6 +402,7 @@ class ZoomBrowserDriver {
       if (clicked === 'clicked') return
       await sleep(400)
     }
+    if (!required) return
     await this.shot('makehost-no-dialog')
     throw new Error(`Zoom's confirmation for making ${this.who(userId)} the host did not appear.`)
   }

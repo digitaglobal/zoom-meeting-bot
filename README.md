@@ -21,7 +21,7 @@ npm run tick:dry                   # what would the schedule check do right now?
 
 Settings go in a `.env` file in this folder (see `.env.example`): `ZOOM_USERNAME`, `ZOOM_PASSWORD`, and optionally
 `NEW_HOST_NAME` (default `Kemal`, not case sensitive: "kemal" and "Kemal" both match "Kemal Example". Use the **full display name** as it shows in Zoom, so fewer people can fit).
-`BACKUP_HOST_NAMES` (optional) lists more people who get host if they are seen before `NEW_HOST_NAME`; see "Backup hosts" below.
+`BACKUP_HOST_NAMES`, `STAFF_JSON`, `SLACK_ROSTER_TOKEN`, `SLACK_ROSTER_EXCLUDE_IDS` and `FIRST_HOST_SLACK_ID` (all optional) decide who else can be made host; see "Who can be made host" below.
 The first run opens a visible Chrome window once so you can sign in; after that it runs hidden.
 
 ## Run it on GitHub (free, every 10 minutes, computer off)
@@ -40,24 +40,98 @@ variable cannot narrow it). Locally, `MEETING_FILTER` in `.env` can still limit 
 
 > The host's name is a *secret* (`NEW_HOST_NAME`), so GitHub hides it in the log, and the bot itself never writes it there.
 
-**Backup hosts (optional).** `NEW_HOST_NAME` is the first choice. A second secret, `BACKUP_HOST_NAMES`, can list more people
-(full display names exactly as Zoom shows them, separated by commas or new lines; at most 20). There is no "late" limit:
-whoever on the list the bot sees first gets host, so a backup who is already in is made host without waiting for the first
-choice. If two people from the list are there at the same check, the **earlier name on the list wins**, so the first choice
-always beats a backup (the bot lets the first choice in from the waiting room even if a backup is already inside). Once a
-backup has been made host the bot leaves, and a first choice who arrives later is left alone. On a cloud run a one-word
-backup name is refused, because it would also fit strangers who share that word. The list is a secret like the host's name:
-it is never printed, never given to Chrome, and a public log says only "a backup host" without naming anyone.
+### Who can be made host
 
-**Everyone active in Slack (optional, live).** With a read-only Slack token in the secret `SLACK_ROSTER_TOKEN` (permission
-`users:read` and nothing else: make a small Slack app of its own, do **not** reuse the Paula bot's token, which can also post
-and read channels), every **active** member of the Slack workspace can be made host. The list is read fresh when the meeting starts
-and again every 10 minutes while the bot waits, so someone deactivated in Slack drops off and a new colleague is added with no
-setting to change. Rules: deactivated people, bots, Slackbot and **guests** are left out; only names of two or more real words count
-(a name such as "Jamie" or "Alex S" is skipped, because it would fit strangers or never match what Zoom shows); the order is
-`NEW_HOST_NAME`, then `BACKUP_HOST_NAMES`, then the Slack people, and whoever is seen first wins, the earlier name winning a tie. If Slack
-cannot be read the bot carries on with the fixed names and logs the Slack error code (never a name or the token). A person's Zoom display
-name must contain their Slack full name, so colleagues should join with their real full name.
+`NEW_HOST_NAME` is the first choice. Everything else here is optional and only **adds** people. The bot keeps one ordered list
+and takes the **first person on it who is seen**: an earlier name beats a later one, even if the later one is already inside
+(the first choice is let in from the waiting room even if someone further down the list is already in the meeting). Once someone
+has been made host the bot leaves, and anyone who arrives later is left alone. On a cloud run no name is printed: the public log
+says only "the new host" (on your own computer the log does show names).
+
+| Setting | Where | What it does | If empty |
+|---|---|---|---|
+| `NEW_HOST_NAME` | GitHub secret, or `.env` | The first choice: the host's **full display name** as Zoom shows it. With the Slack list on, this person is first in line unless `FIRST_HOST_SLACK_ID` names someone else. | Locally the built-in default `Kemal`. A **cloud run refuses to start**. |
+| `BACKUP_HOST_NAMES` | secret / `.env` | More people (full names, separated by commas or new lines, at most 20). **A fail-safe only:** used when the Slack list is off or cannot be read. A one-word name is refused on a cloud run. | No backups |
+| `SLACK_ROSTER_TOKEN` | secret / `.env` | A read-only Slack token (`xoxb-...`). Turns the live Slack list on: every active member can be made host. | The Slack list is off |
+| `SLACK_ROSTER_EXCLUDE_IDS` | secret / `.env` | Slack user ids, separated by commas, to leave out: shared or test accounts that are not people, for example `U0EXAMPL90,U0EXAMPL91`. Ids only, never a token. | **Nobody is skipped** (see the warning below) |
+| `FIRST_HOST_SLACK_ID` | secret / `.env` | The Slack user id of the person who is first in line when the Slack list is on, for example `U0EXAMPL01`. | The person named in `NEW_HOST_NAME` is first, matched by name |
+| `STAFF_JSON` or `STAFF_LIST_PATH` | secret (the JSON itself) / `.env` (a file path) | Extra rules in JSON: a plain list of names, or an object (see "Extra rules" below). | No extra rules |
+
+These are secrets like the host's name: never given to Chrome and never committed (a test fails if a Slack-id-shaped value is
+found in the repository). The Slack token never appears in any log or error message.
+
+**The live Slack list (optional).** Put a read-only token in `SLACK_ROSTER_TOKEN`. Make a small Slack app of its own with the
+permission `users:read` and nothing else: do **not** reuse a bot token that can also post or read channels. The bot reads the member
+list **once at the start of each run** (one call, kept for that run), so someone deactivated in Slack drops off and a new colleague
+is added with no setting to change. Left out: deactivated people, bots, Slackbot, **guests**, and every id in
+`SLACK_ROSTER_EXCLUDE_IDS`. A person's name is their Slack full name or display name, whichever has more words; a member whose name is a single word is left off the list (a bare first name is never matched). The order is: the
+first host (`FIRST_HOST_SLACK_ID`, else the person named in `NEW_HOST_NAME`), then anyone in `priority` (see below), then everyone
+else in the order Slack returns them. With the list on, **it is the whole source of truth**: `BACKUP_HOST_NAMES` and the `people` in
+`STAFF_JSON` do not add anyone (a `people` entry can still give aliases to someone who is on the Slack list). If Slack cannot be
+read, the bot carries on with the fixed names (`NEW_HOST_NAME`, then `BACKUP_HOST_NAMES`, then the `people` in `STAFF_JSON`), logs
+only Slack's own error code (never a name or the token), and tries Slack again about 10 minutes later while it waits.
+
+> **Set `SLACK_ROSTER_EXCLUDE_IDS` before the Slack list is turned on.** No id is built into this public code, so with the setting
+> empty **nobody is skipped**: a shared account (a "Front Desk" or test login that is not a person) counts as staff and could be
+> made host. The bot does not refuse to start without it. Switch the list on in this order: (1) deploy the code, (2) set
+> `NEW_HOST_NAME` and `SLACK_ROSTER_EXCLUDE_IDS` (and `FIRST_HOST_SLACK_ID` if you want a fixed first host), (3) run the offline
+> checks below, (4) add `SLACK_ROSTER_TOKEN` **last**.
+
+**Extra rules: `STAFF_JSON` / `STAFF_LIST_PATH` (optional).** Either a plain list of names, or an object like this (see
+`staff.json.example`; the names and ids here are made up):
+
+```json
+{
+  "firstHostSlackId": "U0EXAMPL01",
+  "priority": ["Avery Stone", "U0EXAMPL04"],
+  "excludeIds": ["U0EXAMPL90"],
+  "aliases": { "Jordan Banks": ["J Banks"], "U0EXAMPL03": ["Dana G"] },
+  "people": [{ "name": "Jordan Bishop" }]
+}
+```
+
+- `firstHostSlackId`: the same as `FIRST_HOST_SLACK_ID`.
+- `priority`: people moved up the list, right after the first host (a full name or a Slack id).
+- `excludeIds`: added to `SLACK_ROSTER_EXCLUDE_IDS`.
+- `aliases`: other names a person may join under, keyed by their Slack id or full name. Each alias needs **two or more words** (for example "Dana G"): a one-word alias is ignored.
+- `people`: the fail-safe list used when the Slack list is off or cannot be read (a plain list of names means the same thing).
+- **Any other key is rejected** with an error, never ignored: a misspelt `excludedIds` that was silently dropped would leave a shared account eligible as host. `excludeIds` may also be written `exclude_ids`, as a list or a comma separated string.
+
+**How a Zoom name is matched.** Names are compared ignoring capital letters, accents and punctuation. With the Slack list on, a
+person (say "Avery Stone") is recognised when their Zoom display name is:
+
+- their full name, alone or followed by a device word or a note in brackets: "Avery Stone", "Avery Stone (iPhone)", "Avery Stone (Marketing)";
+- their first name and last initial, alone or with a device word or a note in brackets: "Avery S", "Avery S.", "Avery S. (iPad)"; or
+- a Slack display name of two or more words.
+
+**A bare first name never matches.** "Dana", "dana" or "Dana (iPhone)" is not enough, not even when nobody else on the list has
+that first name, and a one-word alias or nickname is ignored. The minimum is **first name plus last initial**. A last name that
+only *starts* with that letter does not count either: "Avery Smith" and "Dana Green" do not match Avery Stone and Dana Gray, and
+neither does "Dana G. Lopez" (a middle initial). **Any other word before or after the name means somebody else**: "Dr Avery Stone", "Avery Stone Johnson" and "Avery Stone - Ops" do not match, and a candidate called "Maria Lopez Garcia" is not the staff member "Maria Lopez" (a note in brackets is fine; a middle name left out is too: "Mary Smith" fits Mary Ann Smith). A display name longer than 200 characters never matches. A Slack member whose name is a single word is left off the list. **A better fit
+beats a weaker one**: the real "Avery Stone" (also as "Avery Stone (iPhone)") always beats a guest who joined as "Avery S", so the
+real person is never pushed aside. If **two people fit equally well** (two guests who both joined as "Avery S", or one person joined
+twice from two devices), the bot does nothing and waits rather than guess. For the same reason "Jordan B." is refused when two
+staff names (Jordan Banks and Jordan Bishop) both fit it, with the Slack list on or off.
+
+**Check it before a real meeting.** These start nothing and need no Zoom login:
+
+```
+node src/cli.js --who-would-host --people "Avery S., Jane Guest"      # judged by YOUR settings (NEW_HOST_NAME, STAFF_JSON, ...)
+node src/cli.js --who-would-host --roster test/unit/fixtures/sample-roster.json --people "Avery S., Jane Guest"
+node src/match-cli.js --roster test/unit/fixtures/sample-roster.json --exclude-ids U0EXAMPL90,U0EXAMPL91 --first-id U0EXAMPL01 --people "Avery S., Front Desk"
+node src/cli.js --meeting <number> --dry-handover
+```
+
+- `--who-would-host` uses the settings in force (`NEW_HOST_NAME`, `BACKUP_HOST_NAMES`, `STAFF_JSON`, the exclusions). With
+  `SLACK_ROSTER_TOKEN` set and no `--roster` it makes one read-only call to Slack; with `--roster <file>` it uses a local copy of a
+  member list instead (a JSON list of `{ "slackId", "name", "displayName" }`, see `test/unit/fixtures/sample-roster.json`) and
+  calls nothing. It prints `Would make ... the host` (exit code 0) or `Would not make anyone host` (exit code 2).
+- `src/match-cli.js` does the same with every setting given as an option (`--first`, `--backups`, `--staff-json`, `--staff`,
+  `--roster`, `--exclude-ids`, `--first-id`), so nothing is read from the environment or `.env`. Try it **without**
+  `--exclude-ids` to see what an empty exclusion list lets through.
+- `--dry-handover` joins a real meeting and logs who it would admit and make host, but never clicks Admit or Make Host.
+- On Windows PowerShell put JSON in an environment variable (`$env:STAFF_JSON = '[{"name":"Jordan Banks"}]'`) or in a file:
+  PowerShell strips the quotes inside a command-line argument, so `--staff-json '[...]'` fails with "not valid JSON".
 
 ### One-time setup
 
@@ -75,7 +149,8 @@ name must contain their Slack full name, so colleagues should join with their re
 4. **Repository hygiene:** no collaborators, two-factor sign-in on the GitHub account, branch protection on `main`.
    Never switch this workflow to a **self-hosted** runner: a public repository must only use GitHub's own runners.
 5. **The host's name:** a second secret, `NEW_HOST_NAME` = the host's **full display name exactly as Zoom shows it**
-   (a cloud run refuses to start without it, because a first name alone lets lookalikes fit).
+   (a cloud run refuses to start without it, because a first name alone lets lookalikes fit). To let more people be made host,
+   see "Who can be made host" above: set the optional secrets there in the order it gives, with `SLACK_ROSTER_TOKEN` last.
 6. **Try it:** *Actions -> Zoom host hand-over -> Run workflow* (leave "dry run" ticked first).
 
 If Zoom ever signs the bot out, a run fails with "the saved session has probably expired": repeat steps 1-2.
@@ -162,16 +237,23 @@ differs, `src/browserDriver.js` is the one file to adjust. The hand-over rules a
 - It **never ends the meeting for everyone.** The only leave button it can press is the plain "Leave Meeting", and only
   after Zoom shows Kemal as host. A test checks the source can never contain an "end for everyone" click.
 - It only **admits and promotes the person whose name matches.** "Kemal" matches "Kemal Example", not "Kemalettin". If two
-  people fit, **even if one is an exact match**, it does nothing rather than guess. It ignores notetaker bots and everyone
+  people fit equally well, **even if one is an exact match** of a one-word name, it does nothing rather than guess; with a
+  full name a better fit beats a weaker one (see "How a Zoom name is matched"). It ignores notetaker bots and everyone
   else, and the "Make Host" confirmation (read only from the confirmation dialog) must name exactly the intended person.
 - **Known limits (a display name is not an identity):** Zoom shows the bot only names. A guest who has the meeting link
   and types the host's name *first* can be admitted and made host if the real person is not there yet, and a lookalike
   who is already inside is chosen even if the real person is still in the waiting room. The worst case is host of that
   one meeting; it cannot reach the Zoom account's settings, stored recordings or other meetings. Use the **full display
-  name** in `NEW_HOST_NAME` and ask the host to join with that name. If the real person and a lookalike are inside at the
-  same moment, or the same person is in twice (a second device), the bot does nothing and waits. Every name added to
+  name** in `NEW_HOST_NAME` and ask the host to join with that name. If the real person and a lookalike fit equally well, or
+  the same person is in twice (a second device), the bot does nothing and waits. Every name added to
   `BACKUP_HOST_NAMES` is one more name a guest could type, and a guest who truly has that name (a common one such as
   "Alex Smith") would be made host if they join first, so list only people who are really meant to run the meeting.
+  **With the Slack list on, every active member is such a name, in two forms** (the full name, and first name plus last initial
+  such as "Avery S."): a stranger who joins as "Avery S." while that person is absent can be admitted and made host, so the worst
+  case is someone who happens to share a first name and last initial. A bare first name, or a longer last name that merely starts
+  with the same letter, never matches. Keep the Slack workspace to people who may run a meeting, leave guests as guests (they
+  are skipped), put shared accounts in `SLACK_ROSTER_EXCLUDE_IDS`, and ask hosts to join with their full name. (A one-word name
+  typed by hand, such as the old default `Kemal`, still matches as a whole word: use a full name.)
 - If Kemal never arrives, or Zoom does not confirm the change, **the bot stays in the meeting as host** (on your computer
   until you press Ctrl+C; on GitHub until the run's 70-minute limit stops it, and the run is marked failed from the start,
   even if the browser dies). Until that limit it does not leave the meeting without its host, and it never claims success
@@ -194,14 +276,14 @@ differs, `src/browserDriver.js` is the one file to adjust. The hand-over rules a
     runner, so the residual risk is a Chrome exploit delivered through Zoom's own pages; Chrome keeps its cookie store in
     a throw-away folder that disappears with the runner;
   - env files are read only for the bot's own settings (anything else in them is ignored);
-  - tests (`npm test`) fail if any of these rules is broken, or if a password, token, email address, saved session or
-    real-looking meeting number is found in a committed file, and the workflow runs them before every hand-over.
+  - tests (`npm test`) fail if any of these rules is broken, or if a password, token, email address, saved session,
+    real-looking meeting number or real-looking Slack user id is found in a committed file, and the workflow runs them before every hand-over.
 
 ## Tests
 
 | Command | What it checks | Uses real Zoom? |
 |---|---|---|
-| `npm test` | 70+ offline checks: picking the right person, every hand-over situation with a pretend meeting, the schedule and Jamaica-time rules, the saved-session handling, the log masking, and the repository/workflow safety rules | No |
+| `npm test` | 250+ offline checks: picking the right person (full names, first name and last initial, the Slack list and its exclusions, all with made-up names), every hand-over situation with a pretend meeting, the schedule and Jamaica-time rules, the saved-session handling, the log masking, and the repository/workflow safety rules | No |
 | `npm run test:live` / `test:live-cli` | the real hand-over with a second browser playing "Kemal-Test" | **Yes** (starts a short real meeting, always ends it) |
 | `npm run test:live-scheduled -- --meeting <number> --yes` | starting a meeting that is on the schedule | **Yes** |
 | `npm run test:live-tick -- --meeting <number> --title "<text>" --yes` | the whole cloud flow (empty profile, saved session only, no password, quiet log) | **Yes** |
@@ -217,6 +299,10 @@ src/tick.js            one schedule check
 src/upcoming.js        reads Zoom's "Upcoming" list; decides which meeting is due (Jamaica time)
 src/handover.js        the step-by-step job and its safety rules (testable without Zoom)
 src/participants.js    picking the right person; checking the host change happened
+src/staffList.js       who can be made host: the fixed names, the extra rules (STAFF_JSON) and the order
+src/slackRoster.js     reads the active member list from Slack (read-only, once per run)
+src/makeHostMenu.js    opening a person's menu to make them host, with retries
+src/match-cli.js       the offline "who would get host?" check (no Zoom, no Slack needed)
 src/browserDriver.js   everything that touches Zoom's screens (selectors live here)
 src/session.js         the saved login as one text value (encode, decode; never printed)
 src/stay.js            what the bot does when it cannot finish: stay as host, and fail the run if the browser dies

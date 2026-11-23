@@ -36,6 +36,32 @@ function pageScript() {
   // Zoom's screen raises harmless errors while it draws (a resize notice, for one). They are only noted, never fatal: the
   // SDK's own init and join callbacks, and the driver's time limit, decide whether the start worked.
   window.__BOT_NOTES = [];
+  function normName(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+  // The participants panel uses a made-up "Name#1" id. Look up the real Zoom userId by display name, then call ZoomMtg.makeHost.
+  window.__BOT_HOST = {
+    makeHostByName: function (displayName) {
+      if (typeof ZoomMtg === 'undefined' || typeof ZoomMtg.makeHost !== 'function') {
+        return Promise.resolve({ ok: false, reason: 'no-sdk-makeHost' });
+      }
+      return new Promise(function (resolve) {
+        if (typeof ZoomMtg.getAttendeeslist !== 'function') { resolve({ ok: false, reason: 'no-sdk-attendees' }); return; }
+        ZoomMtg.getAttendeeslist({
+          success: function (res) {
+            var wanted = normName(displayName);
+            var list = (res && res.result && res.result.attendeesList) || [];
+            var hits = list.filter(function (a) { return normName(a && a.userName) === wanted; });
+            if (hits.length !== 1) { resolve({ ok: false, reason: hits.length ? 'ambiguous' : 'not-in-sdk-list', count: hits.length }); return; }
+            ZoomMtg.makeHost({
+              userId: hits[0].userId,
+              success: function () { resolve({ ok: true, via: 'sdk' }); },
+              error: function (e) { resolve({ ok: false, reason: 'sdk-makeHost-failed', detail: why(e) }); }
+            });
+          },
+          error: function (e) { resolve({ ok: false, reason: 'sdk-attendees-failed', detail: why(e) }); }
+        });
+      });
+    }
+  };
   window.addEventListener('error', function (e) { if (window.__BOT_NOTES.length < 5) window.__BOT_NOTES.push(String(e.message || '').slice(0, 120)); });
   try {
     if (typeof ZoomMtg === 'undefined') { set('error', 'The Zoom SDK did not load.'); return; }

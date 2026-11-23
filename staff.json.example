@@ -1,0 +1,9 @@
+{
+  "firstHostSlackId": "U0EXAMPL01",
+  "priority": [],
+  "excludeIds": ["U0EXAMPL90", "U0EXAMPL91"],
+  "aliases": {
+    "U0EXAMPL01": [],
+    "U0EXAMPL06": []
+  }
+}

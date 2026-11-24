@@ -210,11 +210,13 @@ function pickFromPanel({ inside, outside, entries, excludeUserId } = {}) {
 //     it must never open the door to everybody whose name contains that word, or even to someone whose name is exactly that word.
 //  2. Exactly ONE staff member fits at their best tier. "Jordan B" with both a Jordan Banks and a Jordan Bishop on the list, or two
 //     staff with the same full name, is refused: the bot does not guess who it is.
-//  3. Nobody else present (inside or waiting) fits that SAME staff member at the SAME tier. Two people who both joined as "Jordan B",
-//     or one person joined twice under the same name, cannot be told apart, so neither is let in (the same "do nothing rather than
-//     guess" rule as the hand-over). When the twin goes away, the next check lets the one who is left in.
+//  3. Nobody else present (inside or waiting) fits that SAME staff member AT ALL, at any tier. Two people who both joined as "Jordan B",
+//     one person joined twice under the same name, or a "Jordan B" next to the real "Jordan Banks" who is already in the meeting (or
+//     "Avery Stone (iPhone)" next to "Avery Stone"), cannot be told apart from a lookalike, so neither is let in (the same "do nothing
+//     rather than guess" rule as the hand-over; the new host can always let a held person in by hand). When the other one goes away,
+//     the next check lets the one who is left in. The person the HOST rule is admitting is not affected: that rule is unchanged.
 // Staff entries whose Slack id is in `excludeSlackIds` are never counted, so an excluded account can never be admitted by name.
-// Returns { admit: [{ person, staff, kind }], refused: [{ person, reason }] } (reason: 'two-staff' | 'same-name-twice').
+// Returns { admit: [{ person, staff, kind }], refused: [{ person, reason }] } (reason: 'two-staff' | 'same-staff-twice').
 function admissibleStaff({ people, entries, excludeUserId, excludeSlackIds } = {}) {
   const excluded = new Set((excludeSlackIds || []).map((s) => String(s ?? '').trim().toUpperCase()).filter(Boolean))
   // A staff entry whose name is a single word (only possible from a hand-typed fail-safe name such as NEW_HOST_NAME="Alex") is never used
@@ -240,8 +242,8 @@ function admissibleStaff({ people, entries, excludeUserId, excludeSlackIds } = {
     const top = mine.filter((f) => f.rank === best)
     if (top.length > 1) { refused.push({ person: p, reason: 'two-staff' }); continue }
     const { staff, kind } = top[0]
-    const twin = present.some((q) => q !== p && fits.get(q).some((f) => f.staff === staff && f.rank === best))
-    if (twin) { refused.push({ person: p, reason: 'same-name-twice' }); continue }
+    const twin = present.some((q) => q !== p && fits.get(q).some((f) => f.staff === staff))
+    if (twin) { refused.push({ person: p, reason: 'same-staff-twice' }); continue }
     admit.push({ person: p, staff, kind })
   }
   return { admit, refused }

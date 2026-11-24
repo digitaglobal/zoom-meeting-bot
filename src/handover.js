@@ -19,6 +19,8 @@ const STAFF_RETRY_MS = 15000
 const MAX_STAFF_CLICKS = 3
 // A short pause after letting staff in, so the participants list can settle before the Make Host menu is opened.
 const STAFF_SETTLE_MS = 1000
+// If the click that lets the host candidate in fails (they left, or the panel moved), look again; this many failures in a row end the run.
+const MAX_HOST_ADMIT_FAILURES = 3
 
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -73,20 +75,21 @@ async function runHandover(driver, opts, deps = {}) {
     const skip = new Set(skipUserIds.map(String))
     if (refused.length && !staffRefusedLogged) {
       staffRefusedLogged = true
-      log(`${redactNames ? `${refused.length} ${refused.length === 1 ? 'person' : 'people'}` : refused.map((r) => r.person.userName).join(', ')} in the waiting room could be more than one staff member, or share a name with someone else. Not letting them in.`)
+      // A public log says neither who nor how many.
+      log(`${redactNames ? 'Someone' : refused.map((r) => r.person.userName).join(', ')} in the waiting room could be more than one staff member, or shares a name with someone else. Not letting them in.`)
     }
     let clicked = 0
     for (const { person, kind } of admit) {
       const id = String(person.userId)
       if (skip.has(id)) continue
       if (dryHandover) {
-        if (!staffAnnounced.has(id)) { staffAnnounced.add(id); log(`Dry run: would let ${redactNames ? 'a staff member' : person.userName} in from the waiting room (matched as ${kindLabel(kind)}). Not clicking.`) }
+        if (!staffAnnounced.has(id)) { staffAnnounced.add(id); log(`Dry run: would let ${redactNames ? 'a staff member' : `${person.userName} (matched as ${kindLabel(kind)})`} in from the waiting room. Not clicking.`) }
         continue
       }
       const seen = staffClicks.get(id)
       if (seen && (seen.clicks >= MAX_STAFF_CLICKS || now() - seen.at < STAFF_RETRY_MS)) continue
       staffClicks.set(id, { at: now(), clicks: (seen ? seen.clicks : 0) + 1 })
-      log(`${seen ? 'Trying again to let' : 'Letting'} ${redactNames ? 'a staff member' : person.userName} in from the waiting room (staff, matched as ${kindLabel(kind)}).`)
+      log(`${seen ? 'Trying again to let' : 'Letting'} ${redactNames ? 'a staff member' : `${person.userName} (staff, matched as ${kindLabel(kind)})`} in from the waiting room.`)
       try {
         await driver.admit(person.userId)
         staffLetIn.add(id)
@@ -114,6 +117,7 @@ async function runHandover(driver, opts, deps = {}) {
   let usedBackup = false
   let warned = false
   let pickedKind = null
+  let hostAdmitFailures = 0
   while (now() < deadline) {
     if (getRosterNames && now() - rosterAt >= rosterRefreshMs) await refreshRoster()
     const people = await driver.people()
@@ -122,8 +126,10 @@ async function runHandover(driver, opts, deps = {}) {
     const inside = people.filter((p) => !p.waiting)
     const outside = people.filter((p) => p.waiting)
     const picked = pickFromPanel({ inside, outside, entries, excludeUserId: exclude })
-    // ADMIT_ALL_STAFF: let in every other staff member who is waiting (the person the host rule admits below is left to that rule).
-    await admitWaitingStaff(people, picked.match && picked.waiting ? [picked.match.userId] : [])
+    const hostWaiting = !!(picked.match && picked.waiting)
+    // ADMIT_ALL_STAFF: let in every other staff member who is waiting. When the host rule has someone to let in, that person is let in
+    // FIRST (below) and the others follow in the wait loop, so the extra clicks can never make the host candidate slip away.
+    if (!hostWaiting || dryHandover) await admitWaitingStaff(people, hostWaiting ? [picked.match.userId] : [])
     if (picked.match && !picked.waiting) { target = picked.match; usedBackup = picked.usedBackup; pickedKind = picked.kind; break }
     if (picked.match && picked.waiting) {
       if (dryHandover) {
@@ -131,7 +137,18 @@ async function runHandover(driver, opts, deps = {}) {
         return { ok: true, dryRun: true, wouldAdmit: true, wouldMakeHost: true, target: picked.match, usedBackup: picked.usedBackup, kind: picked.kind, staff: picked.staff, info }
       }
       log(`${picked.usedBackup ? 'A backup host: ' : ''}${upper(who(picked.match))} is in the waiting room. Letting them in.`)
-      await driver.admit(picked.match.userId)
+      try {
+        await driver.admit(picked.match.userId)
+        hostAdmitFailures = 0
+      } catch (e) {
+        // The person may have left, or the panel may have moved, between reading it and clicking. Look again instead of giving up;
+        // a click that keeps failing (3 times in a row) still ends the run with the error, exactly as before.
+        hostAdmitFailures++
+        if (hostAdmitFailures >= MAX_HOST_ADMIT_FAILURES) throw e
+        log(`Could not let them in yet (${e && e.message ? e.message : 'unknown problem'}). Looking at the waiting room again.`)
+        await sleep(pollMs)
+        continue
+      }
       // Re-read the panel until the admitted person shows up in the "in the meeting" list (up to ~20 seconds).
       // The old fixed 1.5-second pause was often too short for the row (and its More button) to finish moving.
       // Only the staff entry that was just admitted counts here, so a lower-priority person who happens to be

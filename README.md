@@ -132,16 +132,18 @@ A waiting person is let in only when **all** of these are true:
   Stone", "Avery Stone - Ops") or a last name that merely starts with the same letter ("Avery Smith").
 - **Exactly one staff member fits.** If the name could be two staff ("Jordan B" when both a Jordan Banks and a Jordan Bishop work
   here, or two staff with the very same full name), nobody is let in and the log says so once. The bot does not guess.
-- **Nobody else present fits that same staff member equally well.** Two people who both joined as "Avery S", or one person
-  who joined twice under the same name (two devices), are not told apart, so neither is let in until only one is left. (The
-  full name next to a weaker form is not a tie: "Avery Stone" inside and "Avery S" waiting are different fits.)
+- **Nobody else present fits that same staff member at all.** Two people who both joined as "Avery S", one person who joined twice
+  (two devices), or an "Avery S" or "Avery Stone (iPhone)" next to the real "Avery Stone", cannot be told apart from a lookalike, so
+  neither is let in until only one is left. The new host can always let a held person in by hand.
 - **They are not excluded.** An account in `SLACK_ROSTER_EXCLUDE_IDS` (a "Front Desk" or test login) is not on the Slack list at
   all, so even its own full name never gets it in. Guests and bots stay in the waiting room too.
 
 Other details: a staff name typed by hand as a single word (the old `NEW_HOST_NAME` default) is not used for this, because a
 bare first name is not enough; with **no** Slack list (`SLACK_ROSTER_TOKEN` empty, or Slack unreadable) only the fixed host names
-(`NEW_HOST_NAME`, `BACKUP_HOST_NAMES`, the `people` in `STAFF_JSON`) count as staff, and the run says so. A click that does
-not take is retried at most 3 times, 15 seconds apart, and a click that fails is logged and **never stops the hand-over**. A
+(`NEW_HOST_NAME`, `BACKUP_HOST_NAMES`, the `people` in `STAFF_JSON`) count as staff, and the run says so. The person
+who is about to be made host is always let in **first**; the others follow a moment later. If that click fails (they just left, or the
+panel moved) the bot looks again, and three failures in a row end the run with an error, exactly as before. A click on anyone else
+that does not take is retried at most 3 times, 15 seconds apart, and a click that fails is logged and **never stops the hand-over**. A
 dry run (`--dry-handover`) only says who it would let in. The public log says "a staff member", never a name or a number. Any
 value other than `true`/`1`/`yes`/`on` leaves the setting **off**; an unclear value (a typo such as `ture`) is reported in the
 log instead of being guessed.
@@ -295,8 +297,8 @@ differs, `src/browserDriver.js` is the one file to adjust. The hand-over rules a
   exact full name, or first name and last initial ("Avery S"), is let in from the waiting room while the bot is host (not made
   host: that still follows the rules above). Zoom shows the bot only names, so this cannot be told apart from the real colleague.
   It is **off by default** for that reason; switch it on only if letting in a name-only lookalike is acceptable for your
-  meetings (an interview is a closed conversation: judge that before turning it on). Two people with the same name are held back
-  rather than both let in, and the new host can always remove anyone.
+  meetings (an interview is a closed conversation: judge that before turning it on). Two people who fit the same colleague (the same name,
+  or a lookalike next to the real person) are held back rather than let in, and the new host can always remove anyone.
 - If Kemal never arrives, or Zoom does not confirm the change, **the bot stays in the meeting as host** (on your computer
   until you press Ctrl+C; on GitHub until the run's 70-minute limit stops it, and the run is marked failed from the start,
   even if the browser dies). Until that limit it does not leave the meeting without its host, and it never claims success

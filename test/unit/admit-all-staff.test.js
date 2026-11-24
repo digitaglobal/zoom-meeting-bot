@@ -37,10 +37,15 @@ const named = (rows) => rows.map((r) => r.person.userName).sort()
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 test('every staff member in the waiting room is admitted: full name, first name plus last initial, any capitals, a device word or a note in brackets', () => {
-  const waiting = ['Avery Stone', 'dana gray', 'JULES R', 'Parker L.', 'Riley Mason (iPhone)', 'Sasha T', 'Jordan Banks (Marketing)', 'Dana G iPad']
+  // one form per staff member (two forms of the same person's name next to each other are held back: see the "lookalike" test)
+  const waiting = ['Avery Stone', 'dana gray', 'JULES R', 'Parker L.', 'Riley Mason (iPhone)', 'Sasha T', 'Jordan Banks (Marketing)']
   const r = admissibleStaff({ people: [bot(), ...waiting.map((n) => who(n))], entries: staff() })
   assert.deepEqual(named(r.admit), [...waiting].sort())
   assert.deepEqual(r.refused, [])
+  // the other accepted spellings, each on its own
+  for (const alone of ['Dana G iPad', 'Dana G.', 'Dana Gray (Marketing)', 'dana g', 'Avery S (iPad)']) {
+    assert.deepEqual(named(admissibleStaff({ people: [bot(), who(alone)], entries: staff() }).admit), [alone], `"${alone}" alone is let in`)
+  }
 })
 
 test('guests, shared accounts and other bots stay in the waiting room', () => {
@@ -71,10 +76,13 @@ test('a last name that only STARTS with the same letter is refused: only the ful
 
 test('a name two staff could fit is refused, never guessed (first name + initial, or the very same full name)', () => {
   const entries = staff([member('U0EXAMPL10', 'Jordan Bishop')])
-  const r = admissibleStaff({ people: [bot(), who('Jordan B'), who('Jordan B.'), who('Jordan Banks'), who('Jordan Bishop')], entries })
-  assert.deepEqual(named(r.admit), ['Jordan Banks', 'Jordan Bishop'], 'the two full names are each unique')
+  const r = admissibleStaff({ people: [bot(), who('Jordan B'), who('Jordan B.')], entries })
+  assert.deepEqual(r.admit, [])
   assert.deepEqual(named(r.refused), ['Jordan B', 'Jordan B.'])
   assert.ok(r.refused.every((x) => x.reason === 'two-staff'))
+  // the two FULL names each fit only one person, so on their own they are let in (a "Jordan B" next to them would hold them back)
+  assert.deepEqual(named(admissibleStaff({ people: [bot(), who('Jordan Banks'), who('Jordan Bishop')], entries }).admit), ['Jordan Banks', 'Jordan Bishop'])
+  assert.deepEqual(admissibleStaff({ people: [bot(), who('Jordan Banks'), who('Jordan B')], entries }).admit, [], 'an ambiguous "Jordan B" next to the full name holds both back')
 
   // two different people who have exactly the same full name
   const same = mergeStaff({ newHostName: 'Sam Lee', rosterMembers: [member('U0EXAMPL11', 'Sam Lee'), member('U0EXAMPL12', 'Sam Lee')], firstHostSlackId: '' })
@@ -94,16 +102,35 @@ test('two people with the same staff name (or one person on two devices) are not
   const b = who('Avery Stone', { n: 2 })
   let r = admissibleStaff({ people: [bot(), a, b], entries })
   assert.deepEqual(r.admit, [])
-  assert.deepEqual(r.refused.map((x) => x.reason), ['same-name-twice', 'same-name-twice'])
+  assert.deepEqual(r.refused.map((x) => x.reason), ['same-staff-twice', 'same-staff-twice'])
   r = admissibleStaff({ people: [bot(), a], entries })
   assert.equal(r.admit.length, 1, 'the twin left: the one who is left is let in on the next check')
   // a twin who is already INSIDE counts as well
   r = admissibleStaff({ people: [bot(), { ...a, waiting: false }, b], entries })
   assert.deepEqual(r.admit, [])
   assert.equal(r.refused.length, 1)
-  // a weaker form of the name next to the full name is a different tier, not a twin
-  r = admissibleStaff({ people: [bot(), inside('Avery Stone'), who('Avery S')], entries })
-  assert.deepEqual(named(r.admit), ['Avery S'])
+})
+
+test('a lookalike is not let in next to the real person, at ANY tier (a weaker form of the name, a device note, an omitted middle name)', () => {
+  const entries = staff([member('U0EXAMPL13', 'Mary Ann Smith')])
+  // the real Avery Stone is already in the meeting: a guest typing "Avery S" or "Avery Stone [guest]" or "Avery Stone (iPhone)" is held
+  for (const lookalike of ['Avery S', 'Avery S.', 'Avery Stone [guest]', 'Avery Stone (iPhone)']) {
+    const r = admissibleStaff({ people: [bot(), inside('Avery Stone'), who(lookalike)], entries })
+    assert.deepEqual(r.admit, [], `"${lookalike}" next to the real Avery Stone must be held`)
+    assert.deepEqual(r.refused.map((x) => x.person.userName), [lookalike])
+  }
+  // both waiting at once: neither is let in by this setting (the host rule is separate and unchanged)
+  const both = admissibleStaff({ people: [bot(), who('Avery Stone'), who('Avery S')], entries })
+  assert.deepEqual(both.admit, [])
+  assert.equal(both.refused.length, 2)
+  // an omitted middle name fits the real person ("Mary Smith" is Mary Ann Smith), so it is held next to her too
+  assert.deepEqual(admissibleStaff({ people: [bot(), inside('Mary Ann Smith'), who('Mary Smith')], entries }).admit, [])
+  // control: without the real person present, the same names ARE let in (the rules of "who counts as staff" are unchanged)
+  for (const alone of ['Avery S', 'Avery Stone (iPhone)', 'Mary Smith']) {
+    assert.deepEqual(named(admissibleStaff({ people: [bot(), who(alone)], entries }).admit), [alone])
+  }
+  // a different staff member next to them is no problem
+  assert.deepEqual(named(admissibleStaff({ people: [bot(), inside('Dana Gray'), who('Avery S')], entries }).admit), ['Avery S'])
 })
 
 test('only the waiting room is looked at: people already inside are left alone, and the bot never admits itself', () => {
@@ -160,16 +187,19 @@ function clock() {
 }
 
 // A pretend meeting that remembers who was admitted and made host. `stuck` = ids for whom clicking Admit does nothing (a laggy panel).
-function meeting(initial, { failAdmit = [], stuck = [], clk = clock() } = {}) {
+// `failAdmit` = ids whose Admit click always fails; `failOnce` = ids whose FIRST Admit click fails (the person had just left / the panel moved).
+function meeting(initial, { failAdmit = [], failOnce = [], stuck = [], clk = clock() } = {}) {
   const state = initial.map((p) => ({ ...p }))
   const calls = { admit: [], admitAt: [], makeHost: [], leave: 0 }
   const find = (id) => state.find((p) => p.userId === id)
+  const failedOnce = new Set()
   const driver = {
     async join() { return { meetingId: '123456789', link: 'https://zoom.us/j/123456789' } },
     async people() { return state.map((p) => ({ ...p })) },
     async admit(id) {
       calls.admit.push(id); calls.admitAt.push(clk.now())
       if (failAdmit.includes(id)) throw new Error('Could not find an Admit button for that person.')
+      if (failOnce.includes(id) && !failedOnce.has(id)) { failedOnce.add(id); throw new Error('Could not find an Admit button for that person.') }
       if (!stuck.includes(id)) find(id).waiting = false
     },
     async makeHost(id) { calls.makeHost.push(id); state.find((p) => p.isMe).isHost = false; find(id).isHost = true },
@@ -223,6 +253,42 @@ test('ON: a first choice who is already inside is made host, and the staff who a
   assert.deepEqual(m.calls.makeHost, ['Jordan Banks#1'])
 })
 
+test('ON: the person who gets host is let in FIRST, before any other staff member', async () => {
+  const m = meeting([bot(), who('Avery Stone'), who('Dana Gray'), who('Jordan Banks')])
+  const { out } = await run(m, { admitAllStaff: true })
+  assert.equal(out.ok, true)
+  assert.equal(m.calls.admit[0], 'Jordan Banks#1', 'the host candidate is clicked before the extra staff, so nothing can make them slip away')
+  assert.deepEqual([...m.calls.admit].sort(), ['Avery Stone#1', 'Dana Gray#1', 'Jordan Banks#1'])
+})
+
+test('ON: when the panel is slow to show the host candidate as admitted, the extra-staff pass does not click them a second time', async () => {
+  // The candidate stays "waiting" after the click (a laggy panel). The host rule owns that person; the new setting must leave them alone.
+  const m = meeting([bot(), who('Jordan Banks'), who('Avery Stone')], { stuck: ['Jordan Banks#1'] })
+  await run(m, { admitAllStaff: true, waitMs: 15000 })
+  assert.equal(m.calls.admit.filter((id) => id === 'Jordan Banks#1').length, 1, 'clicked once, by the host rule only')
+  assert.equal(m.calls.admit.filter((id) => id === 'Avery Stone#1').length, 1, 'the other staff member was still let in')
+})
+
+test('the click that lets the host candidate in fails once (they just left, or the panel moved): the bot looks again and still hands over, with the setting on or off', async () => {
+  for (const admitAllStaff of [true, false]) {
+    const m = meeting([bot(), who('Jordan Banks'), who('Avery Stone')], { failOnce: ['Jordan Banks#1'] })
+    const { out, lines } = await run(m, { admitAllStaff })
+    assert.equal(out.ok, true, `setting ${admitAllStaff}: the hand-over still completes`)
+    assert.deepEqual(m.calls.makeHost, ['Jordan Banks#1'])
+    assert.equal(m.calls.leave, 1)
+    assert.ok(lines.some((l) => /Could not let them in yet/.test(l)))
+    assert.equal(m.calls.admit.filter((id) => id === 'Jordan Banks#1').length, 2, 'one failed click, one that worked')
+  }
+})
+
+test('the host candidate can never be let in (3 failed clicks in a row): the run ends with the error, as it always did, and the bot stays', async () => {
+  const m = meeting([bot(), who('Jordan Banks'), who('Avery Stone')], { failAdmit: ['Jordan Banks#1'] })
+  await assert.rejects(run(m, { admitAllStaff: true }), /Could not find an Admit button/)
+  assert.equal(m.calls.admit.filter((id) => id === 'Jordan Banks#1').length, 3)
+  assert.equal(m.calls.leave, 0, 'the bot does not leave')
+  assert.deepEqual(m.calls.makeHost, [])
+})
+
 test('ON: a click on another staff member that fails is logged and never stops the hand-over', async () => {
   const m = meeting([bot(), who('Jordan Banks'), who('Dana Gray')], { failAdmit: ['Dana Gray#1'] })
   const { out, lines } = await run(m, { admitAllStaff: true })
@@ -269,6 +335,7 @@ test('ON: a name two staff could fit is left in the waiting room, and the run sa
   assert.deepEqual(m.calls.admit, [])
   const said = lines.filter((l) => /could be more than one staff member/.test(l))
   assert.equal(said.length, 1)
+  assert.ok(!/\d/.test(said[0]), 'a public log does not say how many people either')
   assert.ok(!/Jordan/.test(lines.join('\n')), 'no names in a public log')
 })
 
@@ -313,7 +380,7 @@ test('dry run: nobody is admitted or made host; the log says who WOULD be let in
   assert.equal(a.out.ok, true)
   assert.deepEqual(local.calls.admit, [])
   assert.deepEqual(local.calls.makeHost, [])
-  assert.ok(a.lines.some((l) => /Dry run: would let Avery Stone in from the waiting room/.test(l)))
+  assert.ok(a.lines.some((l) => /Dry run: would let Avery Stone \(matched as [^)]+\) in from the waiting room/.test(l)))
   const cloud = meeting(people)
   const b = await run(cloud, { admitAllStaff: true, dryHandover: true, redactNames: true })
   assert.ok(b.lines.some((l) => /Dry run: would let a staff member in/.test(l)))
@@ -328,6 +395,7 @@ test('a public (redacted) log never names the staff who were let in, and does no
   assert.ok(!/Avery|Dana|Jordan|Stone|Gray|Banks/.test(all))
   assert.ok(/Letting a staff member in/.test(all))
   assert.ok(!/Let in \d/.test(all))
+  assert.ok(!/matched as/.test(all), 'a public log does not say how each person typed their name either')
 })
 
 // ---------------------------------------------------------------------------------------------------------------------------------

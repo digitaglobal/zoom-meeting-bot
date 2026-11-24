@@ -13,7 +13,7 @@ const { parseSlackIds, mergeExcludeIds, isSlackUserId, DEFAULT_EXCLUDED_SLACK_ID
 
 // Only these settings are ever read from an env file. Anything else in the file (another project's secrets) is ignored,
 // so it can never end up in this process or in the browser's environment.
-const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'BACKUP_HOST_NAMES', 'SLACK_ROSTER_TOKEN', 'SLACK_ROSTER_EXCLUDE_IDS', 'FIRST_HOST_SLACK_ID', 'STAFF_LIST_PATH', 'STAFF_JSON', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
+const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'BACKUP_HOST_NAMES', 'SLACK_ROSTER_TOKEN', 'SLACK_ROSTER_EXCLUDE_IDS', 'FIRST_HOST_SLACK_ID', 'ADMIT_ALL_STAFF', 'STAFF_LIST_PATH', 'STAFF_JSON', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
 
 function loadDotEnv(file, env = process.env, allowed = ALLOWED_KEYS) {
   if (!fs.existsSync(file)) return
@@ -57,6 +57,14 @@ function findChrome(explicit, exists = fs.existsSync) {
 }
 
 const truthy = (v) => v === '1' || /^true$/i.test(String(v ?? ''))
+
+// ADMIT_ALL_STAFF: OFF unless it is clearly "on" (1, true, yes or on, in any case). Empty, 0, false, no and off are off. Any other
+// text is also off, and is reported (unclear: true) so a typo is noticed, never silently switched on. It must never stop a hand-over.
+function parseSwitch(raw) {
+  const text = String(raw ?? '').trim()
+  if (/^(1|true|yes|on)$/i.test(text)) return { on: true, unclear: false }
+  return { on: false, unclear: !/^(0|false|no|off)?$/i.test(text) }
+}
 
 function whole(env, key, fallback, min, max) {
   const n = Number(env[key] === undefined || env[key] === '' ? fallback : env[key])
@@ -125,6 +133,9 @@ function loadConfig(env = process.env, opts = {}) {
   const firstHostSlackId = String(env.FIRST_HOST_SLACK_ID || staffOverrides.firstHostSlackId || DEFAULT_FIRST_HOST_SLACK_ID).trim()
   if (firstHostSlackId && !isSlackUserId(firstHostSlackId)) throw new Error('FIRST_HOST_SLACK_ID is not a Slack user id')
 
+  // Optional: let in EVERY staff member who is waiting while the bot is host (not only the one who is made host). Off by default.
+  const admitAll = parseSwitch(env.ADMIT_ALL_STAFF)
+
   let meetingFilter = null
   const filterText = String(env.MEETING_FILTER ?? '.*').trim()
   if (filterText && filterText !== '.*') {
@@ -151,6 +162,8 @@ function loadConfig(env = process.env, opts = {}) {
     slackRosterToken, // '' = off. A secret: never print this object.
     slackRosterExcludeIds, // Slack user ids skipped on the roster (defaults include Front Desk and Casey).
     firstHostSlackId, // default Jordan Banks's Slack id; used when the live roster is on.
+    admitAllStaff: admitAll.on, // ADMIT_ALL_STAFF: false unless clearly switched on
+    admitAllStaffUnclear: admitAll.unclear, // ADMIT_ALL_STAFF was set to something that is neither on nor off: it stays off, and the run says so
     waitSeconds,
     chromePath: (env.CHROME_PATH || '').trim(),
     headed: env.HEADED === undefined ? false : truthy(env.HEADED),

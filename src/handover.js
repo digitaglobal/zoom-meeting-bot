@@ -10,8 +10,15 @@
 // Safety rules: only a person who matches a staff name is ever admitted or made host, and the bot only leaves
 // once Zoom shows the new host. If anything is unclear, it stays. dryHandover logs the person it would
 // make host and never clicks Admit or Make Host.
-const { hostTransferred, pickFromPanel } = require('./participants')
+const { hostTransferred, pickFromPanel, admissibleStaff } = require('./participants')
 const { mergeStaff } = require('./staffList')
+
+// ADMIT_ALL_STAFF: how long to leave a person alone after clicking Admit for them (the panel can lag), and how many times to click
+// for the same person before giving up on them (the new host can still let them in by hand).
+const STAFF_RETRY_MS = 15000
+const MAX_STAFF_CLICKS = 3
+// A short pause after letting staff in, so the participants list can settle before the Make Host menu is opened.
+const STAFF_SETTLE_MS = 1000
 
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -19,7 +26,7 @@ async function runHandover(driver, opts, deps = {}) {
   const sleep = deps.sleep || realSleep
   const now = deps.now || Date.now
   const log = deps.log || (() => {})
-  const { newHostName, backupHostNames = [], staffEntries, staffOverrides, firstHostSlackId, getRosterNames, rosterRefreshMs = 10 * 60 * 1000, waitMs, pollMs = 2000, confirmMs = 20000, attempts = 2, onStarted, start, redactNames = true, dryHandover = false } = opts
+  const { newHostName, backupHostNames = [], staffEntries, staffOverrides, firstHostSlackId, getRosterNames, rosterRefreshMs = 10 * 60 * 1000, waitMs, pollMs = 2000, confirmMs = 20000, attempts = 2, onStarted, start, redactNames = true, dryHandover = false, admitAllStaff = false, excludeIds = [] } = opts
   // Fail-safe names are used until Slack answers, and again if Slack cannot be read.
   // When the live roster arrives, it becomes the source of truth: the first host first (by Slack id, else by NEW_HOST_NAME), then any
   // optional priority, then everyone else currently active. Whoever on that list is seen first gets host.
@@ -50,6 +57,49 @@ async function runHandover(driver, opts, deps = {}) {
   const label = redactNames ? 'the new host' : fixedEntries.map((e) => `"${e.name}"`).join(' or ')
   const kindLabel = (kind) => (kind === 'first-last-initial' ? 'first name and last initial' : kind || 'name')
 
+  // ADMIT_ALL_STAFF (off unless the caller turns it on). While the bot is host, every check of the waiting room also lets in each person
+  // who fits exactly one staff member (see admissibleStaff), not only the one who is about to be made host. Guests, names that two staff
+  // could fit, and a bare first name stay in the waiting room. This never changes WHO gets host (that is still pickFromPanel, below), it
+  // never touches the person the host rule is already admitting (skipUserIds), and a failed click here is logged and never stops the
+  // hand-over. A dry run only says what it would do.
+  const staffClicks = new Map() // userId -> { at, clicks }
+  const staffAnnounced = new Set()
+  const staffLetIn = new Set()
+  let staffRefusedLogged = false
+  const admitWaitingStaff = async (people, skipUserIds = []) => {
+    if (!admitAllStaff) return 0
+    const me = people.find((p) => p.isMe)
+    const { admit, refused } = admissibleStaff({ people, entries, excludeUserId: me && me.userId, excludeSlackIds: excludeIds })
+    const skip = new Set(skipUserIds.map(String))
+    if (refused.length && !staffRefusedLogged) {
+      staffRefusedLogged = true
+      log(`${redactNames ? `${refused.length} ${refused.length === 1 ? 'person' : 'people'}` : refused.map((r) => r.person.userName).join(', ')} in the waiting room could be more than one staff member, or share a name with someone else. Not letting them in.`)
+    }
+    let clicked = 0
+    for (const { person, kind } of admit) {
+      const id = String(person.userId)
+      if (skip.has(id)) continue
+      if (dryHandover) {
+        if (!staffAnnounced.has(id)) { staffAnnounced.add(id); log(`Dry run: would let ${redactNames ? 'a staff member' : person.userName} in from the waiting room (matched as ${kindLabel(kind)}). Not clicking.`) }
+        continue
+      }
+      const seen = staffClicks.get(id)
+      if (seen && (seen.clicks >= MAX_STAFF_CLICKS || now() - seen.at < STAFF_RETRY_MS)) continue
+      staffClicks.set(id, { at: now(), clicks: (seen ? seen.clicks : 0) + 1 })
+      log(`${seen ? 'Trying again to let' : 'Letting'} ${redactNames ? 'a staff member' : person.userName} in from the waiting room (staff, matched as ${kindLabel(kind)}).`)
+      try {
+        await driver.admit(person.userId)
+        staffLetIn.add(id)
+        clicked++
+      } catch (e) {
+        log(`Could not let a staff member in (${e && e.message ? e.message : 'unknown problem'}). The hand-over carries on.`)
+      }
+    }
+    if (clicked) await sleep(STAFF_SETTLE_MS)
+    return clicked
+  }
+  const staffNote = () => (admitAllStaff && staffLetIn.size && !redactNames ? ` Let in ${staffLetIn.size} other staff member(s) from the waiting room while waiting.` : '')
+
   log(start && start.meetingId ? 'Starting the scheduled meeting as host...' : 'Signing in and starting the meeting as host...')
   const info = await driver.join(start)
   if (onStarted) await onStarted(info)
@@ -72,6 +122,8 @@ async function runHandover(driver, opts, deps = {}) {
     const inside = people.filter((p) => !p.waiting)
     const outside = people.filter((p) => p.waiting)
     const picked = pickFromPanel({ inside, outside, entries, excludeUserId: exclude })
+    // ADMIT_ALL_STAFF: let in every other staff member who is waiting (the person the host rule admits below is left to that rule).
+    await admitWaitingStaff(people, picked.match && picked.waiting ? [picked.match.userId] : [])
     if (picked.match && !picked.waiting) { target = picked.match; usedBackup = picked.usedBackup; pickedKind = picked.kind; break }
     if (picked.match && picked.waiting) {
       if (dryHandover) {
@@ -89,6 +141,7 @@ async function runHandover(driver, opts, deps = {}) {
         await sleep(500)
         const fresh = await driver.people()
         const meNow = fresh.find((p) => p.isMe)
+        await admitWaitingStaff(fresh, [picked.match.userId])
         const arrived = pickFromPanel({ inside: fresh.filter((p) => !p.waiting), outside: [], entries, excludeUserId: meNow && meNow.userId })
         if (arrived.match && !arrived.waiting && arrived.staff === picked.staff) {
           target = arrived.match; usedBackup = arrived.usedBackup; pickedKind = arrived.kind
@@ -129,9 +182,10 @@ async function runHandover(driver, opts, deps = {}) {
     while (now() < until) {
       const people = await driver.people()
       if (hostTransferred({ people, targetUserId: target.userId })) {
-        log(`Zoom shows ${who(target)} as the host. Leaving the meeting (not ending it).`)
+        log(`Zoom shows ${who(target)} as the host. Leaving the meeting (not ending it).${staffNote()}`)
         await driver.leave()
-        return { ok: true, target, usedBackup, kind: pickedKind, info }
+        // otherStaffLetIn = the staff let in by ADMIT_ALL_STAFF besides the new host (0 when the setting is off)
+        return { ok: true, target, usedBackup, kind: pickedKind, info, otherStaffLetIn: staffLetIn.size }
       }
       await sleep(1000)
     }

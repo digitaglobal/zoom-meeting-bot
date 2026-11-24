@@ -22,7 +22,7 @@ const { makeLog, scrub } = require('./log')
 const { stayInMeeting } = require('./stay')
 const { buildReport, sendReport, runUrlFromEnv } = require('./report')
 const { mergeStaff } = require('./staffList')
-const { pickFromPanel, toStaffEntries } = require('./participants')
+const { pickFromPanel, toStaffEntries, admissibleStaff, describeAdmission } = require('./participants')
 
 function parseArgs(argv) {
   const out = {}
@@ -74,6 +74,8 @@ async function main() {
   // Everyone currently active in Slack may be made host (one fetch per run, minus the exclusion list).
   const getRosterNames = cfg.slackRosterToken ? createRosterFetcher(cfg.slackRosterToken, { excludeIds: cfg.slackRosterExcludeIds }) : undefined
   if (getRosterNames) log('The Slack member list is on: every active member can be made host (the first host first, then the rest).')
+  if (cfg.admitAllStaffUnclear) log('ADMIT_ALL_STAFF is set to something other than true or false, so it is OFF.')
+  if (cfg.admitAllStaff) log(getRosterNames ? 'ADMIT_ALL_STAFF is on: while the bot is host, every staff member in the waiting room is let in, not only the new host.' : 'ADMIT_ALL_STAFF is on, but the Slack member list is off, so only the fixed host names are let in.')
   if (args.whoWouldHost) {
     const names = String(args.people ?? '').split(/[,\r\n]+/).map((s) => s.trim()).filter(Boolean)
     if (!names.length) throw new Error('--who-would-host needs --people with one or more Zoom display names, separated by commas')
@@ -89,6 +91,8 @@ async function main() {
     } catch (e) { log(`Could not read the Slack member list (${e && e.message ? e.message : 'unknown problem'}); using the names it already has.`) }
     const people = names.map((userName, i) => ({ userId: `${userName}#${i + 1}`, userName, isMe: false, isHost: false, waiting: false }))
     const picked = pickFromPanel({ inside: people, outside: [], entries })
+    // With ADMIT_ALL_STAFF on, also say who would be let in if these names were all waiting in the waiting room.
+    if (cfg.admitAllStaff) log(describeAdmission(admissibleStaff({ people: people.map((p) => ({ ...p, waiting: true })), entries, excludeSlackIds: cfg.slackRosterExcludeIds }), { redact: cfg.quiet }))
     if (picked.match) {
       log(`Would make ${cfg.quiet ? 'the new host' : picked.match.userName} the host (matched as ${picked.kind}${picked.usedBackup ? ', backup' : ''}). Nothing was started.`)
       return 0
@@ -121,7 +125,7 @@ async function main() {
     if (args.tick) {
       // The dry run is the hourly login check: with API credentials it proves every permission (sign in, list, host start key).
       if (args.dryRun && driver.verify) { const v = await driver.verify(); log(`The Zoom API credentials work (${cfg.quiet ? 'meetings listed' : v.meetings + ' upcoming meeting(s)'}, host start key issued).`) }
-      result = await runTick(driver, cfg, { dryRun: args.dryRun, dryHandover: args.dryHandover, getRosterNames, staffEntries, staffOverrides: cfg.staffOverrides, firstHostSlackId: cfg.firstHostSlackId }, { log })
+      result = await runTick(driver, cfg, { dryRun: args.dryRun, dryHandover: args.dryHandover, getRosterNames, staffEntries, staffOverrides: cfg.staffOverrides, firstHostSlackId: cfg.firstHostSlackId, admitAllStaff: cfg.admitAllStaff, excludeIds: cfg.slackRosterExcludeIds }, { log })
       if (result.action !== 'handover') { await driver.close(); return 0 }
     } else {
       result = await runHandover(driver, {
@@ -131,6 +135,8 @@ async function main() {
         staffOverrides: cfg.staffOverrides,
         firstHostSlackId: cfg.firstHostSlackId,
         getRosterNames,
+        admitAllStaff: cfg.admitAllStaff,
+        excludeIds: cfg.slackRosterExcludeIds,
         waitMs: cfg.waitSeconds * 1000,
         start: args.meeting ? { meetingId: args.meeting } : undefined,
         redactNames: cfg.quiet,

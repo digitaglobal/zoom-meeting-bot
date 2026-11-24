@@ -201,6 +201,61 @@ function pickFromPanel({ inside, outside, entries, excludeUserId } = {}) {
   return { match: null, waiting: false, kind: null, usedBackup: false, staff: null, ambiguous }
 }
 
+// ADMIT_ALL_STAFF: which people in the waiting room are staff and may be let in, whether or not they are the one who gets host.
+// `people` is the whole participants panel ({ userId, userName, isMe, waiting }); only people with waiting === true are candidates.
+// A waiting person is let in only when ALL of this holds:
+//  1. At least one staff member fits their display name by the same rules as the hand-over: the full name, or first name plus last
+//     initial, optionally followed by a device word or a note in brackets. A bare first name never fits. A ONE-WORD staff name typed by
+//     hand (such as the old one-word NEW_HOST_NAME default) is not used here at all: that old whole-word rule exists only for picking a host, and
+//     it must never open the door to everybody whose name contains that word, or even to someone whose name is exactly that word.
+//  2. Exactly ONE staff member fits at their best tier. "Jordan B" with both a Jordan Banks and a Jordan Bishop on the list, or two
+//     staff with the same full name, is refused: the bot does not guess who it is.
+//  3. Nobody else present (inside or waiting) fits that SAME staff member at the SAME tier. Two people who both joined as "Jordan B",
+//     or one person joined twice under the same name, cannot be told apart, so neither is let in (the same "do nothing rather than
+//     guess" rule as the hand-over). When the twin goes away, the next check lets the one who is left in.
+// Staff entries whose Slack id is in `excludeSlackIds` are never counted, so an excluded account can never be admitted by name.
+// Returns { admit: [{ person, staff, kind }], refused: [{ person, reason }] } (reason: 'two-staff' | 'same-name-twice').
+function admissibleStaff({ people, entries, excludeUserId, excludeSlackIds } = {}) {
+  const excluded = new Set((excludeSlackIds || []).map((s) => String(s ?? '').trim().toUpperCase()).filter(Boolean))
+  // A staff entry whose name is a single word (only possible from a hand-typed fail-safe name such as NEW_HOST_NAME="Alex") is never used
+  // here: a bare first name is not enough to be let in, not even an exact "Alex".
+  const list = (entries || []).filter((e) => e && tokens(e.name).length >= 2 && !(e.slackId && excluded.has(String(e.slackId).trim().toUpperCase())))
+  const present = (people || []).filter((p) => p && !p.isMe && String(p.userId) !== String(excludeUserId))
+  const fits = new Map()
+  for (const p of present) {
+    const found = []
+    for (const staff of list) {
+      const kind = matchKind(staff.name, p.userName, staff.aliases)
+      if (kind && kind !== 'first-name') found.push({ staff, kind, rank: KIND_RANK[kind] })
+    }
+    fits.set(p, found)
+  }
+  const admit = []
+  const refused = []
+  for (const p of present) {
+    if (!p.waiting) continue
+    const mine = fits.get(p)
+    if (!mine.length) continue // not staff: a guest stays in the waiting room
+    const best = Math.max(...mine.map((f) => f.rank))
+    const top = mine.filter((f) => f.rank === best)
+    if (top.length > 1) { refused.push({ person: p, reason: 'two-staff' }); continue }
+    const { staff, kind } = top[0]
+    const twin = present.some((q) => q !== p && fits.get(q).some((f) => f.staff === staff && f.rank === best))
+    if (twin) { refused.push({ person: p, reason: 'same-name-twice' }); continue }
+    admit.push({ person: p, staff, kind })
+  }
+  return { admit, refused }
+}
+
+// One plain sentence about what admissibleStaff decided. redact = true gives no names (a public cloud log).
+function describeAdmission({ admit, refused }, { redact = true } = {}) {
+  const nameList = (rows) => rows.map((r) => r.person.userName).join(', ')
+  const parts = []
+  if (admit.length) parts.push(`would let ${redact ? `${admit.length} staff member(s)` : nameList(admit)} in from the waiting room`)
+  if (refused.length) parts.push(`would NOT let ${redact ? `${refused.length} person(s)` : nameList(refused)} in (more than one person or staff member fits that name)`)
+  return parts.length ? `Staff admission: ${parts.join('; ')}.` : 'Staff admission: nobody in the waiting room matched a staff member.'
+}
+
 function toStaffEntries(names) {
   return (names || []).filter((n) => n && String(n).trim()).map((n) => (typeof n === 'object' ? { name: n.name, aliases: n.aliases || [] } : { name: String(n).trim(), aliases: [] }))
 }
@@ -214,4 +269,4 @@ function hostTransferred({ people, targetUserId }) {
   return !!(target && target.isHost === true)
 }
 
-module.exports = { norm, tokens, matchOne, matchKind, findNewHost, hasStaffCollision, pickFromPanel, toStaffEntries, hostTransferred, KIND_RANK }
+module.exports = { norm, tokens, matchOne, matchKind, findNewHost, hasStaffCollision, pickFromPanel, admissibleStaff, describeAdmission, toStaffEntries, hostTransferred, KIND_RANK }

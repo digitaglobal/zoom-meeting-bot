@@ -35,6 +35,8 @@ async function runTick(driver, cfg, opts = {}, deps = {}) {
     staffOverrides: opts.staffOverrides,
     firstHostSlackId: opts.firstHostSlackId,
     getRosterNames: opts.getRosterNames,
+    admitAllStaff: !!opts.admitAllStaff,
+    excludeIds: opts.excludeIds,
     waitMs: cfg.waitSeconds * 1000,
     start: { meetingId: meeting.id },
     redactNames: cfg.quiet,

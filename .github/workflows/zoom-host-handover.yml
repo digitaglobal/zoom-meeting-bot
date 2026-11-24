@@ -83,6 +83,9 @@ jobs:
           FIRST_HOST_SLACK_ID: ${{ secrets.FIRST_HOST_SLACK_ID }}
           # optional: JSON overrides only (aliases, priority, extra exclusions). Empty = off.
           STAFF_JSON: ${{ secrets.STAFF_JSON }}
+          # optional: "true" = while the bot is host, let in EVERY staff member who is waiting, not only the one who is made host
+          # (needs the Slack list above to know who the staff are). Empty or anything else = off: only the new host is let in.
+          ADMIT_ALL_STAFF: ${{ secrets.ADMIT_ALL_STAFF }}
           # optional: where the bot sends its private "what happened" report (see README). Empty = no reports.
           REPORT_WEBHOOK_URL: ${{ secrets.REPORT_WEBHOOK_URL }}
           # every meeting on the Zoom account is handled, whatever its title (fixed here on purpose: no repository variable can narrow it)

@@ -10,6 +10,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { scrub } = require('./log')
+const { unfinishedHandoverText, errorReportLooksLikeMenuFailure, menuErrorReportText } = require('./makeHostMenu')
 
 // Written when a report was delivered, so the workflow's "run failed" step does not send a second one for the same run.
 // It belongs to ONE run (its id and attempt) and lives in the runner's own temp folder: the tests that run earlier in the same
@@ -81,9 +82,13 @@ function buildReport({ event, ok, reason, detail, meeting, startedAt, hostName, 
   if (event === 'handover' && ok) {
     out.text = `:white_check_mark: Zoom bot: the interview${which} was started and handed to the new host (${out.when}).`
   } else if (event === 'handover') {
-    out.text = `:warning: Zoom bot: the interview${which} was started but the hand-over did NOT finish (${out.reason || 'unknown reason'}). The bot is staying in the meeting as host: please check it now.${run}`
+    out.text = unfinishedHandoverText({ reason: out.reason, which, run })
   } else if (event === 'error') {
-    out.text = `:warning: Zoom bot stopped with a problem: ${slackSafe(out.detail || 'unknown')}. If it is about signing in, the saved login has expired: run \`npm run export-session\` and update the GitHub secret ZOOM_SESSION.${run}`
+    if (errorReportLooksLikeMenuFailure(out.detail)) {
+      out.text = menuErrorReportText({ detail: slackSafe(out.detail || 'unknown'), run })
+    } else {
+      out.text = `:warning: Zoom bot stopped with a problem: ${slackSafe(out.detail || 'unknown')}. If it is about signing in, the saved login has expired: run \`npm run export-session\` and update the GitHub secret ZOOM_SESSION.${run}`
+    }
   } else if (event === 'test') {
     out.text = `:test_tube: Zoom bot test report: if you can read this, reports reach you. No interview was started.${run}`
   } else {

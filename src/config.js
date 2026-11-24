@@ -8,10 +8,12 @@ const { decodeSession } = require('./session')
 const { parseReportUrl } = require('./report')
 const { API_KEYS, parseApiCredentials } = require('./zoomApi')
 const { norm } = require('./participants')
+const { loadStaffFile, parseStaffJson, mergeOverrides, emptyOverrides } = require('./staffList')
+const { parseSlackIds, mergeExcludeIds, isSlackUserId, DEFAULT_EXCLUDED_SLACK_IDS, DEFAULT_FIRST_HOST_SLACK_ID } = require('./slackRoster')
 
 // Only these settings are ever read from an env file. Anything else in the file (another project's secrets) is ignored,
 // so it can never end up in this process or in the browser's environment.
-const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'BACKUP_HOST_NAMES', 'SLACK_ROSTER_TOKEN','WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
+const ALLOWED_KEYS = new Set(['ZOOM_USERNAME', 'ZOOM_PASSWORD', 'ZOOM_SESSION', 'ZOOM_TIMEZONE', 'NEW_HOST_NAME', 'BACKUP_HOST_NAMES', 'SLACK_ROSTER_TOKEN', 'SLACK_ROSTER_EXCLUDE_IDS', 'FIRST_HOST_SLACK_ID', 'ADMIT_ALL_STAFF', 'STAFF_LIST_PATH', 'STAFF_JSON', 'WAIT_FOR_NEW_HOST_SECONDS', 'MEETING_FILTER', 'LEAD_MINUTES', 'LATE_MINUTES', 'CHROME_PATH', 'HEADED', 'PROFILE_DIR', 'QUIET', 'REPORT_WEBHOOK_URL', ...API_KEYS])
 
 function loadDotEnv(file, env = process.env, allowed = ALLOWED_KEYS) {
   if (!fs.existsSync(file)) return
@@ -56,6 +58,14 @@ function findChrome(explicit, exists = fs.existsSync) {
 
 const truthy = (v) => v === '1' || /^true$/i.test(String(v ?? ''))
 
+// ADMIT_ALL_STAFF: OFF unless it is clearly "on" (1, true, yes or on, in any case). Empty, 0, false, no and off are off. Any other
+// text is also off, and is reported (unclear: true) so a typo is noticed, never silently switched on. It must never stop a hand-over.
+function parseSwitch(raw) {
+  const text = String(raw ?? '').trim()
+  if (/^(1|true|yes|on)$/i.test(text)) return { on: true, unclear: false }
+  return { on: false, unclear: !/^(0|false|no|off)?$/i.test(text) }
+}
+
 function whole(env, key, fallback, min, max) {
   const n = Number(env[key] === undefined || env[key] === '' ? fallback : env[key])
   if (!Number.isFinite(n) || n < min || n > max) throw new Error(`${key} must be a number from ${min} to ${max}`)
@@ -85,14 +95,15 @@ function parseBackupNames(raw, firstChoice, ci) {
   return names
 }
 
-function loadConfig(env = process.env) {
+function loadConfig(env = process.env, opts = {}) {
   const username = String(env.ZOOM_USERNAME ?? '').trim()
   const password = String(env.ZOOM_PASSWORD ?? '')
   const rawSession = String(env.ZOOM_SESSION ?? '').trim()
   // The Zoom API credentials (all six, or none) need no login at all: that is the permanent way in and it wins over a saved session.
-  const api = parseApiCredentials(env)
+  const api = opts.namesOnly ? null : parseApiCredentials(env)
   // Otherwise a saved session is enough on its own (the older cloud way, it expires in ~15 h); otherwise a login is required.
-  if (!rawSession && !api) {
+  // namesOnly is for --who-would-host: it never opens Zoom, so a login is not required.
+  if (!opts.namesOnly && !rawSession && !api) {
     const missing = [!username && 'ZOOM_USERNAME', !password.trim() && 'ZOOM_PASSWORD'].filter(Boolean)
     if (missing.length) throw new Error(`Missing settings: ${missing.join(', ')} (put them in a .env file; see .env.example)`)
   }
@@ -104,9 +115,26 @@ function loadConfig(env = process.env) {
   const newHostName = String(env.NEW_HOST_NAME || 'Kemal').trim()
   if (!newHostName) throw new Error('NEW_HOST_NAME cannot be empty')
   const backupHostNames = parseBackupNames(env.BACKUP_HOST_NAMES, newHostName, ci)
-  // Optional: a read-only Slack token (permission "users:read" only). With it, every active person in Slack can be made host.
+  // Optional overrides only (aliases, priority, extra exclusions). The live Slack roster is the source of truth.
+  const staffListPath = String(env.STAFF_LIST_PATH ?? '').trim()
+  const staffJsonRaw = String(env.STAFF_JSON ?? '').trim()
+  const staffOverrides = mergeOverrides(
+    staffJsonRaw ? parseStaffJson(staffJsonRaw) : emptyOverrides(),
+    staffListPath ? loadStaffFile(path.resolve(staffListPath)) : emptyOverrides(),
+  )
+  const filePeople = staffOverrides.people || []
+  // Optional: a Slack token with permission "users:read". With it, every active person in Slack (minus exclusions) can be made host.
   const slackRosterToken = String(env.SLACK_ROSTER_TOKEN ?? '').trim()
   if (slackRosterToken && !/^xox[a-z]-[A-Za-z0-9-]{10,300}$/.test(slackRosterToken)) throw new Error('SLACK_ROSTER_TOKEN is not a Slack token (it should start with "xoxb-")')
+  const slackRosterExcludeIds = mergeExcludeIds(
+    parseSlackIds(env.SLACK_ROSTER_EXCLUDE_IDS, { defaults: DEFAULT_EXCLUDED_SLACK_IDS, setting: 'SLACK_ROSTER_EXCLUDE_IDS' }),
+    staffOverrides.excludeIds,
+  )
+  const firstHostSlackId = String(env.FIRST_HOST_SLACK_ID || staffOverrides.firstHostSlackId || DEFAULT_FIRST_HOST_SLACK_ID).trim()
+  if (firstHostSlackId && !isSlackUserId(firstHostSlackId)) throw new Error('FIRST_HOST_SLACK_ID is not a Slack user id')
+
+  // Optional: let in EVERY staff member who is waiting while the bot is host (not only the one who is made host). Off by default.
+  const admitAll = parseSwitch(env.ADMIT_ALL_STAFF)
 
   let meetingFilter = null
   const filterText = String(env.MEETING_FILTER ?? '.*').trim()
@@ -123,11 +151,19 @@ function loadConfig(env = process.env) {
     password,
     canSignInWithPassword: !!(username && password.trim()),
     // In API mode an old saved login is ignored entirely: it is not decoded and never handed to Chrome as cookies.
-    session: rawSession && !api ? decodeSession(rawSession) : null,
+    session: (!opts.namesOnly && rawSession && !api) ? decodeSession(rawSession) : null,
     api, // { accountId, clientId, clientSecret, sdkKey, sdkSecret, hostEmail } or null. Secrets: never print this object.
     newHostName,
     backupHostNames, // other people who get host if they are seen before the first choice (newHostName); never printed
+    filePeople, // fail-safe people from STAFF_JSON / STAFF_LIST_PATH. Never printed.
+    staffOverrides, // aliases, priority, exclusions. Never printed in full if it holds names.
+    staffListPath, // may be empty. A path, not a secret, but still never handed to Chrome.
+    staffJson: staffJsonRaw, // may be empty. A secret-like setting: never print it.
     slackRosterToken, // '' = off. A secret: never print this object.
+    slackRosterExcludeIds, // Slack user ids skipped on the roster (defaults include Front Desk and Casey).
+    firstHostSlackId, // default Jordan Banks's Slack id; used when the live roster is on.
+    admitAllStaff: admitAll.on, // ADMIT_ALL_STAFF: false unless clearly switched on
+    admitAllStaffUnclear: admitAll.unclear, // ADMIT_ALL_STAFF was set to something that is neither on nor off: it stays off, and the run says so
     waitSeconds,
     chromePath: (env.CHROME_PATH || '').trim(),
     headed: env.HEADED === undefined ? false : truthy(env.HEADED),

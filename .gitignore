@@ -7,3 +7,6 @@ node_modules/
 .zoom-meeting-bot/
 screenshots/
 *.log
+# a real staff list holds real names and Slack ids: never commit it (staff.json.example is the made-up template)
+staff.json
+staff.*.json

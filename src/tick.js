@@ -31,10 +31,16 @@ async function runTick(driver, cfg, opts = {}, deps = {}) {
   const result = await handover(driver, {
     newHostName: cfg.newHostName,
     backupHostNames: cfg.backupHostNames,
+    staffEntries: opts.staffEntries,
+    staffOverrides: opts.staffOverrides,
+    firstHostSlackId: opts.firstHostSlackId,
     getRosterNames: opts.getRosterNames,
+    admitAllStaff: !!opts.admitAllStaff,
+    excludeIds: opts.excludeIds,
     waitMs: cfg.waitSeconds * 1000,
     start: { meetingId: meeting.id },
     redactNames: cfg.quiet,
+    dryHandover: !!opts.dryHandover,
   }, { log })
   return { ...result, action: 'handover', meeting }
 }
